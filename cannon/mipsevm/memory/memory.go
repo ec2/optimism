@@ -151,13 +151,17 @@ func (m *Memory) SetWord(addr Word, v Word) {
 		// Go may mmap relatively large ranges, but we only allocate the pages just in time.
 		p = m.AllocPage(pageIndex)
 	} else {
-		prevValid := p.Ok[1]
+		prevValid := p.getBit(1)
 		p.invalidate(pageAddr)
 		if prevValid {
 			m.merkleIndex.Invalidate(addr) // invalidate this branch of memory, now that the value changed
 		}
 	}
-	arch.ByteOrderWord.PutWord(p.Data[pageAddr:pageAddr+arch.WordSizeBytes], v)
+	arch.ByteOrderWord.PutWord(p.Data[pageAddr:pageAddr+arch.WordSizeBytes:pageAddr+arch.WordSizeBytes], v)
+	// // Manually inline arch.ByteOrderWord.PutWord to eliminate slice bounds check
+	// data := p.Data                          // Local copy hints to the compiler that it doesn't need to re-check bounds
+	// _ = data[pageAddr+arch.WordSizeBytes-1] // Bounds check elimination trick
+	// arch.ByteOrderWord.PutWord(data[pageAddr:pageAddr+arch.WordSizeBytes], v)
 }
 
 // GetWord reads the maximum sized value, [arch.Word], located at the specified address.
@@ -173,7 +177,11 @@ func (m *Memory) GetWord(addr Word) Word {
 		return 0
 	}
 	pageAddr := addr & PageAddrMask
-	return arch.ByteOrderWord.Word(p.Data[pageAddr : pageAddr+arch.WordSizeBytes])
+	// Manually inline arch.ByteOrderWord.PutWord to eliminate slice bounds check
+	// data := p.Data                          // Local copy hints to the compiler that it doesn't need to re-check bounds
+	// _ = data[pageAddr+arch.WordSizeBytes-1] // Bounds check elimination trick
+	// return arch.ByteOrderWord.Word(data[pageAddr : pageAddr+arch.WordSizeBytes : pageAddr+arch.WordSizeBytes])
+	return arch.ByteOrderWord.Word(p.Data[pageAddr : pageAddr+arch.WordSizeBytes : pageAddr+arch.WordSizeBytes])
 }
 
 func (m *Memory) AllocPage(pageIndex Word) *CachedPage {
