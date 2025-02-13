@@ -2,7 +2,62 @@ package memory
 
 import (
 	"math/bits"
+	"sync"
+
+	"github.com/ethereum/go-ethereum/crypto"
 )
+
+// Byte32Pool is a sync.Pool for [32]byte slices
+var Byte32Pool = sync.Pool{
+	New: func() interface{} {
+		var b [32]byte
+		return &b // Return a pointer to avoid extra allocations
+	},
+}
+
+// GetByte32 retrieves a *[32]byte from the pool
+func GetByte32() *[32]byte {
+	return Byte32Pool.Get().(*[32]byte)
+}
+
+// PutByte32 returns a *[32]byte to the pool
+func PutByte32(b *[32]byte) {
+	// Optional: Zero the array before putting it back
+	*b = [32]byte{}
+	Byte32Pool.Put(b)
+}
+
+var hashPool = sync.Pool{
+	New: func() interface{} {
+		return crypto.NewKeccakState()
+	},
+}
+
+func GetHasher() crypto.KeccakState {
+	return hashPool.Get().(crypto.KeccakState)
+}
+
+func PutHasher(h crypto.KeccakState) {
+	h.Reset()
+	hashPool.Put(h)
+}
+
+func Hash2(out *[32]byte, left, right *[32]byte) {
+	h := GetHasher()
+	h.Write(left[:])
+	h.Write(right[:])
+	h.Read(out[:])
+	PutHasher(h)
+}
+
+func HashData(out *[32]byte, data ...[]byte) {
+	h := GetHasher()
+	for _, b := range data {
+		h.Write(b)
+	}
+	h.Read(out[:])
+	PutHasher(h)
+}
 
 // BinaryTreeIndex is a representation of the state of the memory in a binary merkle tree.
 type BinaryTreeIndex struct {
@@ -43,6 +98,10 @@ func (m *BinaryTreeIndex) Invalidate(addr Word) {
 	gindex := (uint64(1) << (WordSize - PageAddrSize)) | uint64(addr>>PageAddrSize)
 
 	for gindex > 0 {
+		n := m.nodes[gindex]
+		if n != nil {
+			PutByte32(n)
+		}
 		m.nodes[gindex] = nil
 		gindex >>= 1
 	}
@@ -73,9 +132,10 @@ func (m *BinaryTreeIndex) MerkleizeSubtree(gindex uint64) [32]byte {
 	}
 	left := m.MerkleizeSubtree(gindex << 1)
 	right := m.MerkleizeSubtree((gindex << 1) | 1)
-	r := HashPair(left, right)
-	m.nodes[gindex] = &r
-	return r
+	r := GetByte32()
+	Hash2(r, &left, &right)
+	m.nodes[gindex] = r
+	return *r
 }
 
 func (m *BinaryTreeIndex) MerkleProof(addr Word) (out [MemProofSize]byte) {
@@ -115,6 +175,10 @@ func (m *BinaryTreeIndex) AddPage(pageIndex Word) {
 	// make nodes to root
 	k := (1 << PageKeySize) | uint64(pageIndex)
 	for k > 0 {
+		n := m.nodes[k]
+		if n != nil {
+			PutByte32(n)
+		}
 		m.nodes[k] = nil
 		k >>= 1
 	}

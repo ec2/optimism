@@ -9,8 +9,6 @@ import (
 	"fmt"
 	"io"
 	"sync"
-
-	"github.com/ethereum/go-ethereum/crypto"
 )
 
 var zlibWriterPool = sync.Pool{
@@ -105,7 +103,6 @@ func (p *CachedPage) setBit(k uint64) {
 }
 
 func (p *CachedPage) InvalidateFull() {
-	// p.Ok = [PageSize / 32]bool{} // reset everything to false
 	p.OkHigh = 0
 	p.OkLow = 0
 	// p.Ok = bits.NewBitlist64(PageSize / 32)
@@ -118,7 +115,8 @@ func (p *CachedPage) MerkleRoot() [32]byte {
 		if p.getBit(j) {
 			continue
 		}
-		p.Cache[j] = crypto.Keccak256Hash(p.Data[i : i+64 : i+64])
+		HashData(&p.Cache[j], p.Data[i:i+64])
+		// p.Cache[j] = crypto.Keccak256Hash(p.Data[i : i+64 : i+64])
 		//fmt.Printf("0x%x 0x%x -> 0x%x\n", p.Data[i:i+32], p.Data[i+32:i+64], p.Cache[j])
 		// p.Ok[j] = true
 		p.setBit(j)
@@ -130,7 +128,7 @@ func (p *CachedPage) MerkleRoot() [32]byte {
 		if p.getBit(uint64(j)) {
 			continue
 		}
-		p.Cache[j] = HashPair(p.Cache[i], p.Cache[i+1])
+		Hash2(&p.Cache[j], &p.Cache[i], &p.Cache[i+1])
 		// p.Ok[j] = true
 		p.setBit(uint64(j))
 	}
