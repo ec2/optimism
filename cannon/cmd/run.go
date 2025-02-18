@@ -441,21 +441,21 @@ func Run(ctx *cli.Context) error {
 			// 		"gap", r[3],
 			// 	)
 			// }
-			// totalRead := state.GetMemory().RprogramRegion + state.GetMemory().RmallocRegion + state.GetMemory().RheapRegion + state.GetMemory().RstackRegion
-			// totalWrite := state.GetMemory().WprogramRegion + state.GetMemory().WmallocRegion + state.GetMemory().WheapRegion + state.GetMemory().WstackRegion
-			// l.Info("Read Section Percentages",
-			// 	"RprogramRegion", float64(state.GetMemory().RprogramRegion)/float64(totalRead),
-			// 	"RmallocRegion", float64(state.GetMemory().RmallocRegion)/float64(totalRead),
-			// 	"RheapRegion", float64(state.GetMemory().RheapRegion)/float64(totalRead),
-			// 	"RstackRegion", float64(state.GetMemory().RstackRegion)/float64(totalRead),
-			// )
+			totalRead := state.GetMemory().RprogramRegion + state.GetMemory().RmallocRegion + state.GetMemory().RheapRegion + state.GetMemory().RstackRegion
+			totalWrite := state.GetMemory().WprogramRegion + state.GetMemory().WmallocRegion + state.GetMemory().WheapRegion + state.GetMemory().WstackRegion
+			l.Info("Read Section Percentages",
+				"RprogramRegion", float64(state.GetMemory().RprogramRegion)/float64(totalRead),
+				"RmallocRegion", float64(state.GetMemory().RmallocRegion)/float64(totalRead),
+				"RheapRegion", float64(state.GetMemory().RheapRegion)/float64(totalRead),
+				"RstackRegion", float64(state.GetMemory().RstackRegion)/float64(totalRead),
+			)
 
-			// l.Info("Write Section Percentages",
-			// 	"WprogramRegion", float64(state.GetMemory().WprogramRegion)/float64(totalWrite),
-			// 	"WmallocRegion", float64(state.GetMemory().WmallocRegion)/float64(totalWrite),
-			// 	"WheapRegion", float64(state.GetMemory().WheapRegion)/float64(totalWrite),
-			// 	"WstackRegion", float64(state.GetMemory().WstackRegion)/float64(totalWrite),
-			// )
+			l.Info("Write Section Percentages",
+				"WprogramRegion", float64(state.GetMemory().WprogramRegion)/float64(totalWrite),
+				"WmallocRegion", float64(state.GetMemory().WmallocRegion)/float64(totalWrite),
+				"WheapRegion", float64(state.GetMemory().WheapRegion)/float64(totalWrite),
+				"WstackRegion", float64(state.GetMemory().WstackRegion)/float64(totalWrite),
+			)
 
 			insn := mipsexec.LoadSubWord(state.GetMemory(), pc, 4, false, new(mipsexec.NoopMemoryTracker))
 			l.Info("processing",

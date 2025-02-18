@@ -56,15 +56,15 @@ type Memory struct {
 
 	ProgramRegion []byte
 
-	// RprogramRegion uint64
-	// RmallocRegion  uint64
-	// RheapRegion    uint64
-	// RstackRegion   uint64
+	RprogramRegion uint64
+	RmallocRegion  uint64
+	RheapRegion    uint64
+	RstackRegion   uint64
 
-	// WprogramRegion uint64
-	// WmallocRegion  uint64
-	// WheapRegion    uint64
-	// WstackRegion   uint64
+	WprogramRegion uint64
+	WmallocRegion  uint64
+	WheapRegion    uint64
+	WstackRegion   uint64
 }
 
 type PageIndex interface {
@@ -209,7 +209,17 @@ func (m *Memory) SetWord(addr Word, v Word) {
 	if addr&arch.ExtMask != 0 {
 		panic(fmt.Errorf("unaligned memory access: %x", addr))
 	}
-
+	if addr < arch.ProgramHeapStart {
+		m.WprogramRegion++
+	} else if addr < arch.HeapStart {
+		m.WmallocRegion++
+	} else if addr < arch.HighMemoryStart {
+		m.WheapRegion++
+	} else if addr < arch.Limit {
+		m.WstackRegion++
+	} else {
+		panic(fmt.Errorf("invalid memory write: %x", addr))
+	}
 	pageIndex := addr >> PageAddrSize
 	pageAddr := addr & PageAddrMask
 	p, ok := m.PageLookup(pageIndex)
@@ -236,6 +246,17 @@ func (m *Memory) GetWord(addr Word) Word {
 		panic(fmt.Errorf("unaligned memory access: %x", addr))
 	}
 
+	if addr < arch.ProgramHeapStart {
+		m.RprogramRegion++
+	} else if addr < arch.HeapStart {
+		m.RmallocRegion++
+	} else if addr < arch.HighMemoryStart {
+		m.RheapRegion++
+	} else if addr < arch.Limit {
+		m.RstackRegion++
+	} else {
+		panic(fmt.Errorf("invalid memory read: %x", addr))
+	}
 	if addr < arch.ProgramHeapStart {
 		// fmt.Printf("PageLookup under heapstart: %x\n", pageIndex)
 		return arch.ByteOrderWord.Word(m.ProgramRegion[addr : addr+arch.WordSizeBytes : addr+arch.WordSizeBytes])
