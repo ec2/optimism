@@ -72,10 +72,11 @@ func NewBinaryTreeMemory() *Memory {
 	index := NewBinaryTreeIndex()
 	index.setPageBacking(pages)
 	return &Memory{
-		merkleIndex:   index,
-		pageTable:     pages,
-		lastPageKeys:  [2]Word{^Word(0), ^Word(0)}, // default to invalid keys, to not match any pages
-		ProgramRegion: make([]byte, 0, 1<<31),
+		merkleIndex:    index,
+		pageTable:      pages,
+		lastPageKeys:   [2]Word{^Word(0), ^Word(0)}, // default to invalid keys, to not match any pages
+		ProgramRegion:  make([]byte, 0, 1<<31),
+		GoMallocRegion: make([]byte, 0, 1<<31),
 	}
 }
 
