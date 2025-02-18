@@ -75,7 +75,7 @@ func NewBinaryTreeMemory() *Memory {
 		merkleIndex:   index,
 		pageTable:     pages,
 		lastPageKeys:  [2]Word{^Word(0), ^Word(0)}, // default to invalid keys, to not match any pages
-		ProgramRegion: make([]*CachedPage, 0, 1<<31),
+		ProgramRegion: make([]byte, 0, 1<<31),
 	}
 }
 
