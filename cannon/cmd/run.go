@@ -414,7 +414,7 @@ func Run(ctx *cli.Context) error {
 			"gap", r[3],
 		)
 	}
-	state.GetMemory().Rejig()
+	state.GetMemory().InitMappedRegions()
 	start := time.Now()
 
 	startStep := state.GetStep()

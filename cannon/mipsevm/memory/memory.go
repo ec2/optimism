@@ -43,6 +43,27 @@ var zeroHashes = func() [256][32]byte {
 	return out
 }()
 
+type MappedMemoryRegion struct {
+	start_addr Word
+	end_addr   Word
+	data       []byte
+}
+
+func (m *MappedMemoryRegion) AddrInRegion(addr Word) bool {
+	return addr >= m.start_addr && addr < m.end_addr
+}
+
+func (m *MappedMemoryRegion) PageIndexInRegion(pageIndex Word) bool {
+	return pageIndex >= m.start_addr>>PageAddrSize && pageIndex < m.end_addr>>PageAddrSize
+}
+
+func (m *MappedMemoryRegion) AccessWordBytes(addr Word) ([]byte, bool) {
+	if m.AddrInRegion(addr) {
+		return m.data[addr : addr+arch.WordSizeBytes : addr+arch.WordSizeBytes], true
+	}
+	return nil, false
+}
+
 type Memory struct {
 	merkleIndex PageIndex
 	// Note: since we don't de-alloc Pages, we don't do ref-counting.
@@ -54,9 +75,7 @@ type Memory struct {
 	lastPageKeys [2]Word
 	lastPage     [2]*CachedPage
 
-	ProgramRegion  []byte
-	GoMallocRegion []byte
-
+	mappedRegions []MappedMemoryRegion
 	// RprogramRegion uint64
 	// RmallocRegion  uint64
 	// RheapRegion    uint64
@@ -79,20 +98,21 @@ type PageIndex interface {
 	setPageBacking(pages map[Word]*CachedPage)
 }
 
-func (m *Memory) Rejig() {
+func (m *Memory) InitMappedRegions() {
 	indexes := maps.Keys(m.pageTable)
 	slices.Sort(indexes)
 	for _, pageIdx := range indexes {
-		if pageIdx<<arch.PageAddrSize < arch.ProgramHeapStart {
-			m.ProgramRegion = m.ProgramRegion[:(pageIdx+1)*PageSize]
-			// m.ProgramRegion[pageIdx] = m.pageTable[pageIdx]
-			copy(m.ProgramRegion[pageIdx*PageSize:(pageIdx)*PageSize], m.pageTable[pageIdx].Data)
-			m.pageTable[pageIdx].Data = m.ProgramRegion[pageIdx*PageSize : (pageIdx+1)*PageSize]
-		} else if pageIdx<<arch.PageAddrSize < arch.HeapStart {
-			m.GoMallocRegion = m.GoMallocRegion[:(pageIdx+1)*PageSize]
-			// m.GoMallocRegion[pageIdx] = m.pageTable[pageIdx]
-			copy(m.GoMallocRegion[pageIdx*PageSize:(pageIdx)*PageSize], m.pageTable[pageIdx].Data)
-			m.pageTable[pageIdx].Data = m.GoMallocRegion[pageIdx*PageSize : (pageIdx+1)*PageSize]
+		for _, region := range m.mappedRegions {
+			if region.PageIndexInRegion(pageIdx) {
+				currLen := len(region.data)
+				indexAdjusted := pageIdx - region.start_addr>>PageAddrSize
+				if indexAdjusted*PageSize >= Word(currLen) {
+					region.data = region.data[:(pageIdx+1)*PageSize]
+				}
+				copy(region.data[indexAdjusted*PageSize:(indexAdjusted+1)*PageSize], m.pageTable[pageIdx].Data)
+				m.pageTable[pageIdx].Data = region.data[indexAdjusted*PageSize : (indexAdjusted+1)*PageSize]
+				break
+			}
 		}
 	}
 }
@@ -182,15 +202,13 @@ func (m *Memory) PageLookup(pageIndex Word) (*CachedPage, bool) {
 }
 
 func (m *Memory) Mmap(addr, size, newheap Word) {
-	if addr < arch.ProgramHeapStart {
-		fmt.Printf("Mmap Pre Heap: %x size: %x newheap: %x\n", addr, size, newheap)
-	} else if addr < arch.HeapStart {
-		fmt.Printf("Mmap Go Heap: %x size: %x newheap: %x\n", addr, size, newheap)
-		m.GoMallocRegion = m.GoMallocRegion[:addr-arch.ProgramHeapStart+size]
-	} else {
+	for _, region := range m.mappedRegions {
+		if region.AddrInRegion(addr) {
+			region.data = region.data[:addr-region.start_addr+size]
+			break
+		}
 	}
 	fmt.Printf("Mmap addr: %x size: %x newheap: %x\n", addr, size, newheap)
-
 }
 
 func (m *Memory) SetMemoryRange(addr Word, r io.Reader) error {
@@ -271,12 +289,13 @@ func (m *Memory) GetWord(addr Word) Word {
 	// } else {
 	// 	panic(fmt.Errorf("invalid memory read: %x", addr))
 	// }
-	if addr < arch.ProgramHeapStart {
-		// fmt.Printf("PageLookup under heapstart: %x\n", pageIndex)
-		return arch.ByteOrderWord.Word(m.ProgramRegion[addr : addr+arch.WordSizeBytes : addr+arch.WordSizeBytes])
-	} else if addr < arch.HeapStart {
-		return arch.ByteOrderWord.Word(m.GoMallocRegion[addr-arch.ProgramHeapStart : addr-arch.ProgramHeapStart+arch.WordSizeBytes : addr-arch.ProgramHeapStart+arch.WordSizeBytes])
+	for _, region := range m.mappedRegions {
+		if ok := region.AddrInRegion(addr); ok {
+			offset := addr - region.start_addr
+			return arch.ByteOrderWord.Word(region.data[offset : offset+arch.WordSizeBytes : offset+arch.WordSizeBytes])
+		}
 	}
+
 	pageIndex := addr >> PageAddrSize
 
 	p, ok := m.PageLookup(pageIndex)
@@ -288,26 +307,21 @@ func (m *Memory) GetWord(addr Word) Word {
 }
 
 func (m *Memory) AllocPage(pageIndex Word) *CachedPage {
-
 	p := new(CachedPage)
-	if pageIndex < arch.ProgramHeapStart>>arch.PageAddrSize {
-		proglen := len(m.ProgramRegion)
-		if pageIndex*PageSize >= Word(proglen) {
-			m.ProgramRegion = m.ProgramRegion[:(pageIndex+1)*PageSize]
+	for _, region := range m.mappedRegions {
+		if region.PageIndexInRegion(pageIndex) {
+			currLen := len(region.data)
+			indexAdjusted := pageIndex - region.start_addr>>PageAddrSize
+			if indexAdjusted*PageSize >= Word(currLen) {
+				region.data = region.data[:(pageIndex+1)*PageSize]
+			}
+			p.Data = region.data[indexAdjusted*PageSize : (indexAdjusted+1)*PageSize : (indexAdjusted+1)*PageSize]
+			break
 		}
-		p.Data = m.ProgramRegion[pageIndex*PageSize : (pageIndex+1)*PageSize : (pageIndex+1)*PageSize]
-	} else if pageIndex < arch.HeapStart>>arch.PageAddrSize {
-		proglen := len(m.GoMallocRegion)
-		indexAdjusted := pageIndex - arch.ProgramHeapStart>>arch.PageAddrSize
-		if indexAdjusted*PageSize >= Word(proglen) {
-			m.GoMallocRegion = m.GoMallocRegion[:(indexAdjusted+1)*PageSize]
-		}
-		p.Data = m.GoMallocRegion[indexAdjusted*PageSize : (indexAdjusted+1)*PageSize : (indexAdjusted+1)*PageSize]
-	} else {
-		p.Data = make(Page, PageSize, PageSize)
 	}
-
-	// p.Data = make(Page, PageSize)
+	if p.Data == nil {
+		p.Data = make(Page, PageSize)
+	}
 	m.pageTable[pageIndex] = p
 	m.merkleIndex.AddPage(pageIndex)
 	return p
@@ -373,16 +387,17 @@ func (m *Memory) Copy() *Memory {
 	table := m.merkleIndex.New()
 	table.setPageBacking(pages)
 	out := &Memory{
-		merkleIndex:    table,
-		pageTable:      pages,
-		lastPageKeys:   [2]Word{^Word(0), ^Word(0)}, // default to invalid keys, to not match any pages
-		lastPage:       [2]*CachedPage{nil, nil},
-		ProgramRegion:  make([]byte, len(m.ProgramRegion), 1<<31),
-		GoMallocRegion: make([]byte, len(m.GoMallocRegion), 1<<31),
+		merkleIndex:  table,
+		pageTable:    pages,
+		lastPageKeys: [2]Word{^Word(0), ^Word(0)}, // default to invalid keys, to not match any pages
+		lastPage:     [2]*CachedPage{nil, nil},
+		// ProgramRegion:  make([]byte, len(m.ProgramRegion), 1<<31),
+		// GoMallocRegion: make([]byte, len(m.GoMallocRegion), 1<<31),
+
 	}
 
 	for k, page := range m.pageTable {
-		data := make(Page, PageSize, PageSize)
+		data := make(Page, PageSize)
 		// *data = *page.Data
 		copy(data, page.Data)
 		out.AllocPage(k).Data = data

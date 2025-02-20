@@ -4,6 +4,7 @@ import (
 	"math/bits"
 	"sync"
 
+	"github.com/ethereum-optimism/optimism/cannon/mipsevm/arch"
 	"github.com/ethereum/go-ethereum/crypto"
 )
 
@@ -71,12 +72,23 @@ func NewBinaryTreeMemory() *Memory {
 	pages := make(map[Word]*CachedPage)
 	index := NewBinaryTreeIndex()
 	index.setPageBacking(pages)
+
+	indexedRegions := make([]MappedMemoryRegion, 2)
+	indexedRegions[0] = MappedMemoryRegion{
+		start_addr: 0,
+		end_addr:   arch.ProgramHeapStart,
+		data:       make([]byte, 1<<31),
+	}
+	indexedRegions[1] = MappedMemoryRegion{
+		start_addr: arch.ProgramHeapStart,
+		end_addr:   arch.HeapStart,
+		data:       make([]byte, 1<<31),
+	}
 	return &Memory{
-		merkleIndex:    index,
-		pageTable:      pages,
-		lastPageKeys:   [2]Word{^Word(0), ^Word(0)}, // default to invalid keys, to not match any pages
-		ProgramRegion:  make([]byte, 0, 1<<31),
-		GoMallocRegion: make([]byte, 0, 1<<31),
+		merkleIndex:   index,
+		pageTable:     pages,
+		lastPageKeys:  [2]Word{^Word(0), ^Word(0)}, // default to invalid keys, to not match any pages
+		mappedRegions: indexedRegions,
 	}
 }
 
