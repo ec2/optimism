@@ -27,6 +27,27 @@ const (
 
 type Word = arch.Word
 
+type MappedMemoryRegion struct {
+	start_addr Word
+	end_addr   Word
+	data       []byte
+}
+
+func (m *MappedMemoryRegion) AddrInRegion(addr Word) bool {
+	return addr >= m.start_addr && addr < m.end_addr
+}
+
+func (m *MappedMemoryRegion) PageIndexInRegion(pageIndex Word) bool {
+	return pageIndex >= m.start_addr>>PageAddrSize && pageIndex < m.end_addr>>PageAddrSize
+}
+
+func (m *MappedMemoryRegion) AccessWordBytes(addr Word) ([]byte, bool) {
+	if m.AddrInRegion(addr) {
+		return m.data[addr : addr+arch.WordSizeBytes : addr+arch.WordSizeBytes], true
+	}
+	return nil, false
+}
+
 type Memory struct {
 	merkleIndex PageIndex
 	// Note: since we don't de-alloc Pages, we don't do ref-counting.
@@ -160,12 +181,12 @@ func (m *Memory) PageLookup(pageIndex Word) (*CachedPage, bool) {
 }
 
 func (m *Memory) Mmap(addr, size, newheap Word) {
-	for _, region := range m.mappedRegions {
-		if region.AddrInRegion(addr) {
-			region.data = region.data[:addr-region.start_addr+size]
-			break
-		}
-	}
+	// for _, region := range m.mappedRegions {
+	// 	if region.AddrInRegion(addr) {
+	// 		region.data = region.data[:addr-region.start_addr+size]
+	// 		break
+	// 	}
+	// }
 	fmt.Printf("Mmap addr: %x size: %x newheap: %x\n", addr, size, newheap)
 }
 
@@ -199,17 +220,7 @@ func (m *Memory) SetWord(addr Word, v Word) {
 	if addr&arch.ExtMask != 0 {
 		panic(fmt.Errorf("unaligned memory access: %x", addr))
 	}
-	// if addr < arch.ProgramHeapStart {
-	// 	m.WprogramRegion++
-	// } else if addr < arch.HeapStart {
-	// 	m.WmallocRegion++
-	// } else if addr < arch.HighMemoryStart {
-	// 	m.WheapRegion++
-	// } else if addr < arch.Limit {
-	// 	m.WstackRegion++
-	// } else {
-	// 	panic(fmt.Errorf("invalid memory write: %x", addr))
-	// }
+
 	pageIndex := addr >> PageAddrSize
 	pageAddr := addr & PageAddrMask
 	p, ok := m.PageLookup(pageIndex)
@@ -235,18 +246,6 @@ func (m *Memory) GetWord(addr Word) Word {
 	if addr&arch.ExtMask != 0 {
 		panic(fmt.Errorf("unaligned memory access: %x", addr))
 	}
-
-	// if addr < arch.ProgramHeapStart {
-	// 	m.RprogramRegion++
-	// } else if addr < arch.HeapStart {
-	// 	m.RmallocRegion++
-	// } else if addr < arch.HighMemoryStart {
-	// 	m.RheapRegion++
-	// } else if addr < arch.Limit {
-	// 	m.RstackRegion++
-	// } else {
-	// 	panic(fmt.Errorf("invalid memory read: %x", addr))
-	// }
 	for _, region := range m.mappedRegions {
 		if ok := region.AddrInRegion(addr); ok {
 			offset := addr - region.start_addr
