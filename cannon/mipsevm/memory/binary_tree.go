@@ -2,63 +2,9 @@ package memory
 
 import (
 	"math/bits"
-	"sync"
 
 	"github.com/ethereum-optimism/optimism/cannon/mipsevm/arch"
-	"github.com/ethereum/go-ethereum/crypto"
 )
-
-// Byte32Pool is a sync.Pool for [32]byte slices
-var Byte32Pool = sync.Pool{
-	New: func() interface{} {
-		var b [32]byte
-		return &b // Return a pointer to avoid extra allocations
-	},
-}
-
-// GetByte32 retrieves a *[32]byte from the pool
-func GetByte32() *[32]byte {
-	return Byte32Pool.Get().(*[32]byte)
-}
-
-// PutByte32 returns a *[32]byte to the pool
-func PutByte32(b *[32]byte) {
-	// Optional: Zero the array before putting it back
-	*b = [32]byte{}
-	Byte32Pool.Put(b)
-}
-
-var hashPool = sync.Pool{
-	New: func() interface{} {
-		return crypto.NewKeccakState()
-	},
-}
-
-func GetHasher() crypto.KeccakState {
-	return hashPool.Get().(crypto.KeccakState)
-}
-
-func PutHasher(h crypto.KeccakState) {
-	h.Reset()
-	hashPool.Put(h)
-}
-
-func Hash2(out *[32]byte, left, right *[32]byte) {
-	h := GetHasher()
-	h.Write(left[:])
-	h.Write(right[:])
-	h.Read(out[:])
-	PutHasher(h)
-}
-
-func HashData(out *[32]byte, data ...[]byte) {
-	h := GetHasher()
-	for _, b := range data {
-		h.Write(b)
-	}
-	h.Read(out[:])
-	PutHasher(h)
-}
 
 // BinaryTreeIndex is a representation of the state of the memory in a binary merkle tree.
 type BinaryTreeIndex struct {
@@ -70,8 +16,7 @@ type BinaryTreeIndex struct {
 
 func NewBinaryTreeMemory() *Memory {
 	pages := make(map[Word]*CachedPage)
-	index := NewBinaryTreeIndex()
-	index.setPageBacking(pages)
+	index := NewBinaryTreeIndex(pages)
 
 	indexedRegions := make([]MappedMemoryRegion, 2)
 	indexedRegions[0] = MappedMemoryRegion{
@@ -92,17 +37,15 @@ func NewBinaryTreeMemory() *Memory {
 	}
 }
 
-func NewBinaryTreeIndex() *BinaryTreeIndex {
+func NewBinaryTreeIndex(pages map[Word]*CachedPage) *BinaryTreeIndex {
 	return &BinaryTreeIndex{
-		nodes: make(map[uint64]*[32]byte),
+		nodes:     make(map[uint64]*[32]byte),
+		pageTable: pages,
 	}
 }
-func (m *BinaryTreeIndex) setPageBacking(pages map[Word]*CachedPage) {
-	m.pageTable = pages
-}
 
-func (m *BinaryTreeIndex) New() PageIndex {
-	x := NewBinaryTreeIndex()
+func (m *BinaryTreeIndex) New(pages map[Word]*CachedPage) PageIndex {
+	x := NewBinaryTreeIndex(pages)
 	return x
 }
 
@@ -147,7 +90,7 @@ func (m *BinaryTreeIndex) MerkleizeSubtree(gindex uint64) [32]byte {
 	left := m.MerkleizeSubtree(gindex << 1)
 	right := m.MerkleizeSubtree((gindex << 1) | 1)
 	r := GetByte32()
-	Hash2(r, &left, &right)
+	HashPairNodes(r, &left, &right)
 	m.nodes[gindex] = r
 	return *r
 }

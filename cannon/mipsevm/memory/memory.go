@@ -9,7 +9,6 @@ import (
 	"sort"
 
 	"github.com/ethereum-optimism/optimism/cannon/mipsevm/arch"
-	"github.com/ethereum/go-ethereum/crypto"
 	"golang.org/x/exp/maps"
 )
 
@@ -28,46 +27,11 @@ const (
 
 type Word = arch.Word
 
-func HashPair(left, right [32]byte) [32]byte {
-	out := crypto.Keccak256Hash(left[:], right[:])
-	//fmt.Printf("0x%x 0x%x -> 0x%x\n", left, right, out)
-	return out
-}
-
-var zeroHashes = func() [256][32]byte {
-	// empty parts of the tree are all zero. Precompute the hash of each full-zero range sub-tree level.
-	var out [256][32]byte
-	for i := 1; i < 256; i++ {
-		out[i] = HashPair(out[i-1], out[i-1])
-	}
-	return out
-}()
-
-type MappedMemoryRegion struct {
-	start_addr Word
-	end_addr   Word
-	data       []byte
-}
-
-func (m *MappedMemoryRegion) AddrInRegion(addr Word) bool {
-	return addr >= m.start_addr && addr < m.end_addr
-}
-
-func (m *MappedMemoryRegion) PageIndexInRegion(pageIndex Word) bool {
-	return pageIndex >= m.start_addr>>PageAddrSize && pageIndex < m.end_addr>>PageAddrSize
-}
-
-func (m *MappedMemoryRegion) AccessWordBytes(addr Word) ([]byte, bool) {
-	if m.AddrInRegion(addr) {
-		return m.data[addr : addr+arch.WordSizeBytes : addr+arch.WordSizeBytes], true
-	}
-	return nil, false
-}
-
 type Memory struct {
 	merkleIndex PageIndex
 	// Note: since we don't de-alloc Pages, we don't do ref-counting.
-	// Once a page exists, it doesn't leave memory
+	// Once a page exists, it doesn't leave memory.
+	// This map will usually be shared with the PageIndex as well.
 	pageTable map[Word]*CachedPage
 
 	// two caches: we often read instructions from one page, and do memory things with another page.
@@ -76,15 +40,6 @@ type Memory struct {
 	lastPage     [2]*CachedPage
 
 	mappedRegions []MappedMemoryRegion
-	// RprogramRegion uint64
-	// RmallocRegion  uint64
-	// RheapRegion    uint64
-	// RstackRegion   uint64
-
-	// WprogramRegion uint64
-	// WmallocRegion  uint64
-	// WheapRegion    uint64
-	// WstackRegion   uint64
 }
 
 type PageIndex interface {
@@ -94,8 +49,11 @@ type PageIndex interface {
 	MerkleizeSubtree(gindex uint64) [32]byte
 	Invalidate(addr Word)
 
-	New() PageIndex
-	setPageBacking(pages map[Word]*CachedPage)
+	New(pages map[Word]*CachedPage) PageIndex
+}
+
+func NewMemory() *Memory {
+	return NewBinaryTreeMemory()
 }
 
 func (m *Memory) InitMappedRegions() {
@@ -384,8 +342,7 @@ func (m *Memory) Usage() string {
 
 func (m *Memory) Copy() *Memory {
 	pages := make(map[Word]*CachedPage)
-	table := m.merkleIndex.New()
-	table.setPageBacking(pages)
+	table := m.merkleIndex.New(pages)
 	out := &Memory{
 		merkleIndex:  table,
 		pageTable:    pages,

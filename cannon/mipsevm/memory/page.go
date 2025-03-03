@@ -77,11 +77,10 @@ func (p *CachedPage) invalidate(pageAddr Word) {
 	k >>= 5 + 1
 
 	for k > 0 {
-		mask := uint64(1) << (k & 63)   // Compute bit mask
+		mask := uint64(1) << (k & 63)   // Bitmask
 		isHigh := k >> 6                // 1 if k >= 64, 0 if k < 64
-		p.OkLow &^= mask * (1 - isHigh) // Zero out bit in OkLow if isHigh == 0
-		p.OkHigh &^= mask * isHigh      // Zero out bit in OkHigh if isHigh == 1
-
+		p.OkLow &^= mask * (1 - isHigh) // Zero bit in OkLow if isHigh == 0
+		p.OkHigh &^= mask * isHigh      // Zero bit in OkHigh if isHigh == 1
 		k >>= 1
 	}
 }
@@ -94,18 +93,15 @@ func (p *CachedPage) getBit(k uint64) bool {
 }
 
 func (p *CachedPage) setBit(k uint64) {
-	mask := uint64(1) << (k & 63) // Create bit mask
-	isHigh := k >> 6              // 1 if k >= 64, 0 if k < 64
-
-	// Branchless update
-	p.OkLow |= mask * (1 - isHigh) // Set bit in OkLow if isHigh == 0
-	p.OkHigh |= mask * isHigh      // Set bit in OkHigh if isHigh == 1
+	mask := uint64(1) << (k & 63)  // Bitmask
+	isHigh := k >> 6               // 1 if k >= 64, 0 if k < 64
+	p.OkLow |= mask * (1 - isHigh) // Set in OkLow if isHigh == 0
+	p.OkHigh |= mask * isHigh      // Set in OkHigh if isHigh == 1
 }
 
 func (p *CachedPage) InvalidateFull() {
 	p.OkHigh = 0
 	p.OkLow = 0
-	// p.Ok = bits.NewBitlist64(PageSize / 32)
 }
 
 func (p *CachedPage) MerkleRoot() [32]byte {
@@ -116,9 +112,7 @@ func (p *CachedPage) MerkleRoot() [32]byte {
 			continue
 		}
 		HashData(&p.Cache[j], p.Data[i:i+64])
-		// p.Cache[j] = crypto.Keccak256Hash(p.Data[i : i+64 : i+64])
 		//fmt.Printf("0x%x 0x%x -> 0x%x\n", p.Data[i:i+32], p.Data[i+32:i+64], p.Cache[j])
-		// p.Ok[j] = true
 		p.setBit(j)
 	}
 
@@ -128,8 +122,7 @@ func (p *CachedPage) MerkleRoot() [32]byte {
 		if p.getBit(uint64(j)) {
 			continue
 		}
-		Hash2(&p.Cache[j], &p.Cache[i], &p.Cache[i+1])
-		// p.Ok[j] = true
+		HashPairNodes(&p.Cache[j], &p.Cache[i], &p.Cache[i+1])
 		p.setBit(uint64(j))
 	}
 
@@ -147,36 +140,4 @@ func (p *CachedPage) MerkleizeSubtree(gindex uint64) [32]byte {
 		return *(*[32]byte)(p.Data[nodeIndex*32 : nodeIndex*32+32 : nodeIndex*32+32])
 	}
 	return p.Cache[gindex]
-}
-
-func (p *CachedPage) MerkleizeNode(addr Word, gindex uint64) [32]byte {
-	_ = p.MerkleRoot() // fill cache
-	if gindex >= PageSize/32 {
-		if gindex >= PageSize/32*2 {
-			panic("gindex too deep")
-		}
-
-		// it's pointing to a bottom node
-		nodeIndex := gindex & (PageAddrMask >> 5)
-		return *(*[32]byte)(p.Data[nodeIndex*32 : nodeIndex*32+32])
-	}
-	return p.Cache[gindex]
-}
-
-func (p *CachedPage) GenerateProof(addr Word) [][32]byte {
-	// Page-level proof
-	pageGindex := PageSize>>5 + (addr&PageAddrMask)>>5
-
-	proofs := make([][32]byte, 8)
-	proofIndex := 0
-
-	proofs[proofIndex] = p.MerkleizeSubtree(uint64(pageGindex))
-
-	for idx := pageGindex; idx > 1; idx >>= 1 {
-		sibling := idx ^ 1
-		proofIndex++
-		proofs[proofIndex] = p.MerkleizeSubtree(uint64(sibling))
-	}
-
-	return proofs
 }

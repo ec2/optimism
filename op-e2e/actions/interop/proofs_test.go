@@ -16,9 +16,15 @@ import (
 	"github.com/ethereum-optimism/optimism/op-program/client/interop/types"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/testlog"
+	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/backend/depset"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/stretchr/testify/require"
+)
+
+const (
+	stepsPerTimestamp = 128
+	consolidateStep   = stepsPerTimestamp - 1
 )
 
 func TestInteropFaultProofs_TraceExtensionActivation(gt *testing.T) {
@@ -36,7 +42,7 @@ func TestInteropFaultProofs_TraceExtensionActivation(gt *testing.T) {
 	agreedClaim := system.Outputs.SuperRoot(endTimestamp).Marshal()
 	disputedClaim := system.Outputs.TransitionState(endTimestamp, 1,
 		system.Outputs.OptimisticBlockAtTimestamp(system.Actors.ChainA, endTimestamp+1)).Marshal()
-	disputedTraceIndex := int64(1024)
+	disputedTraceIndex := int64(stepsPerTimestamp)
 	tests := []*transitionTest{
 		{
 			name:               "CorrectlyDidNotActivate",
@@ -90,7 +96,7 @@ func TestInteropFaultProofs_ConsolidateValidCrossChainMessage(gt *testing.T) {
 
 	system.AddL2Block(system.Actors.ChainA, dsl.WithL2BlockTransactions(emitter.EmitMessage(alice, "hello")))
 	initMsg := emitter.LastEmittedMessage()
-	system.AddL2Block(system.Actors.ChainB, dsl.WithL2BlockTransactions(system.InboxContract.Execute(alice, initMsg.Identifier(), initMsg.MessagePayload())))
+	system.AddL2Block(system.Actors.ChainB, dsl.WithL2BlockTransactions(system.InboxContract.Execute(alice, initMsg)))
 
 	// Submit batch data for each chain in separate L1 blocks so tests can have one chain safe and one unsafe
 	system.SubmitBatchData(func(opts *dsl.SubmitBatchDataOpts) {
@@ -114,16 +120,16 @@ func TestInteropFaultProofs_ConsolidateValidCrossChainMessage(gt *testing.T) {
 	tests := []*transitionTest{
 		{
 			name:               "Consolidate-AllValid",
-			agreedClaim:        paddingStep(1023),
+			agreedClaim:        paddingStep(consolidateStep),
 			disputedClaim:      end.Marshal(),
-			disputedTraceIndex: 1023,
+			disputedTraceIndex: consolidateStep,
 			expectValid:        true,
 		},
 		{
 			name:               "Consolidate-AllValid-InvalidNoChange",
-			agreedClaim:        paddingStep(1023),
-			disputedClaim:      paddingStep(1023),
-			disputedTraceIndex: 1023,
+			agreedClaim:        paddingStep(consolidateStep),
+			disputedClaim:      paddingStep(consolidateStep),
+			disputedTraceIndex: consolidateStep,
 			expectValid:        false,
 		},
 	}
@@ -235,9 +241,9 @@ func TestInteropFaultProofs(gt *testing.T) {
 		},
 		{
 			name:               "LastPaddingStep",
-			agreedClaim:        paddingStep(1022),
-			disputedClaim:      paddingStep(1023),
-			disputedTraceIndex: 1022,
+			agreedClaim:        paddingStep(consolidateStep - 1),
+			disputedClaim:      paddingStep(consolidateStep),
+			disputedTraceIndex: consolidateStep - 1,
 			expectValid:        true,
 		},
 		{
@@ -251,7 +257,7 @@ func TestInteropFaultProofs(gt *testing.T) {
 				system.Outputs.OptimisticBlockAtTimestamp(actors.ChainA, endTimestamp+1),
 			).Marshal(),
 			proposalTimestamp:  endTimestamp + 100,
-			disputedTraceIndex: 1024,
+			disputedTraceIndex: consolidateStep + 1,
 			expectValid:        true,
 		},
 		{
@@ -268,7 +274,7 @@ func TestInteropFaultProofs(gt *testing.T) {
 				system.Outputs.OptimisticBlockAtTimestamp(actors.ChainB, endTimestamp+1),
 			).Marshal(),
 			proposalTimestamp:  endTimestamp + 100,
-			disputedTraceIndex: 1025,
+			disputedTraceIndex: consolidateStep + 2,
 			expectValid:        true,
 		},
 		{
@@ -276,7 +282,7 @@ func TestInteropFaultProofs(gt *testing.T) {
 			// Expect to transition to invalid because the unsafe head is reached but challenger needs to handle
 			// not having any data at the next timestamp because the chain doesn't extend that far.
 			name: "DisputeTimestampAfterChainHeadConsolidate",
-			agreedClaim: system.Outputs.TransitionState(endTimestamp, 1023,
+			agreedClaim: system.Outputs.TransitionState(endTimestamp, consolidateStep,
 				system.Outputs.OptimisticBlockAtTimestamp(actors.ChainA, endTimestamp+1),
 				system.Outputs.OptimisticBlockAtTimestamp(actors.ChainB, endTimestamp+1),
 			).Marshal(),
@@ -284,7 +290,7 @@ func TestInteropFaultProofs(gt *testing.T) {
 			// It will have an incremented timestamp but the same chain output roots
 			disputedClaim:      system.Outputs.SuperRoot(endTimestamp + 1).Marshal(),
 			proposalTimestamp:  endTimestamp + 100,
-			disputedTraceIndex: 2047,
+			disputedTraceIndex: 2*stepsPerTimestamp - 1,
 			expectValid:        true,
 		},
 		{
@@ -296,7 +302,7 @@ func TestInteropFaultProofs(gt *testing.T) {
 			// Timestamp has advanced enough to expect the next block now, but it doesn't exit so transition to invalid
 			disputedClaim:      interop.InvalidTransition,
 			proposalTimestamp:  endTimestamp + 100,
-			disputedTraceIndex: 2048,
+			disputedTraceIndex: 2 * stepsPerTimestamp,
 			expectValid:        true,
 		},
 		{
@@ -305,7 +311,7 @@ func TestInteropFaultProofs(gt *testing.T) {
 			agreedClaim:        interop.InvalidTransition,
 			disputedClaim:      interop.InvalidTransition,
 			proposalTimestamp:  endTimestamp + 100,
-			disputedTraceIndex: 3071,
+			disputedTraceIndex: 4*stepsPerTimestamp - 1,
 			expectValid:        true,
 		},
 		{
@@ -314,7 +320,7 @@ func TestInteropFaultProofs(gt *testing.T) {
 			agreedClaim:        interop.InvalidTransition,
 			disputedClaim:      interop.InvalidTransition,
 			proposalTimestamp:  endTimestamp + 100,
-			disputedTraceIndex: 3072,
+			disputedTraceIndex: 4*stepsPerTimestamp + 1,
 			expectValid:        true,
 		},
 
@@ -359,10 +365,85 @@ func TestInteropFaultProofs(gt *testing.T) {
 	runFppAndChallengerTests(gt, system, tests)
 }
 
+func TestInteropFaultProofs_Cycle(gt *testing.T) {
+	t := helpers.NewDefaultTesting(gt)
+
+	system := dsl.NewInteropDSL(t)
+	actors := system.Actors
+
+	alice := system.CreateUser()
+	emitter := dsl.NewEmitterContract(t)
+	system.AddL2Block(actors.ChainA, dsl.WithL2BlockTransactions(emitter.Deploy(alice)))
+	system.AddL2Block(actors.ChainB, dsl.WithL2BlockTransactions(emitter.Deploy(alice)))
+
+	assertHeads(t, actors.ChainA, 1, 0, 1, 0)
+	assertHeads(t, actors.ChainB, 1, 0, 1, 0)
+
+	actEmitA := emitter.EmitMessage(alice, "hello")
+	actEmitB := emitter.EmitMessage(alice, "world")
+
+	actors.ChainA.Sequencer.ActL2StartBlock(t)
+	actors.ChainB.Sequencer.ActL2StartBlock(t)
+
+	// create init messages
+	emitTxA := actEmitA(actors.ChainA)
+	emitTxA.Include()
+	emitTxB := actEmitB(actors.ChainB)
+	emitTxB.Include()
+
+	// execute them within the same block
+	actExecA := system.InboxContract.Execute(alice, emitTxB) // Exec msg on chain A referencing chain B
+	actExecB := system.InboxContract.Execute(alice, emitTxA) // Exec msg on chain B referencing chain A
+	actExecA(actors.ChainA).Include()
+	actExecB(actors.ChainB).Include()
+
+	actors.ChainA.Sequencer.ActL2EndBlock(t)
+	actors.ChainB.Sequencer.ActL2EndBlock(t)
+	actors.ChainA.Sequencer.SyncSupervisor(t)
+	actors.ChainB.Sequencer.SyncSupervisor(t)
+	actors.Supervisor.ProcessFull(t)
+	actors.ChainA.Sequencer.ActL2PipelineFull(t)
+	actors.ChainB.Sequencer.ActL2PipelineFull(t)
+
+	assertHeads(t, actors.ChainA, 2, 0, 2, 0)
+	assertHeads(t, actors.ChainB, 2, 0, 2, 0)
+
+	system.SubmitBatchData()
+	assertHeads(t, actors.ChainA, 2, 2, 2, 2)
+	assertHeads(t, actors.ChainB, 2, 2, 2, 2)
+
+	endTimestamp := system.Actors.ChainA.Sequencer.L2Safe().Time
+	startTimestamp := endTimestamp - 1
+	end := system.Outputs.SuperRoot(endTimestamp)
+
+	paddingStep := func(step uint64) []byte {
+		return system.Outputs.TransitionState(startTimestamp, step,
+			system.Outputs.OptimisticBlockAtTimestamp(actors.ChainA, endTimestamp),
+			system.Outputs.OptimisticBlockAtTimestamp(actors.ChainB, endTimestamp),
+		).Marshal()
+	}
+
+	tests := []*transitionTest{
+		{
+			name:               "Consolidate-AllValid",
+			agreedClaim:        paddingStep(consolidateStep),
+			disputedClaim:      end.Marshal(),
+			disputedTraceIndex: consolidateStep,
+			expectValid:        true,
+		},
+		{
+			name:               "Consolidate-AllValid-InvalidNoChange",
+			agreedClaim:        paddingStep(consolidateStep),
+			disputedClaim:      paddingStep(consolidateStep),
+			disputedTraceIndex: consolidateStep,
+			expectValid:        false,
+		},
+	}
+	runFppAndChallengerTests(gt, system, tests)
+}
+
 func TestInteropFaultProofs_CascadeInvalidBlock(gt *testing.T) {
 	t := helpers.NewDefaultTesting(gt)
-	// TODO(#14307): Support cascading invalidation in op-supervisor
-	t.Skip("Cascading invalidation not yet working")
 
 	system := dsl.NewInteropDSL(t)
 
@@ -387,7 +468,7 @@ func TestInteropFaultProofs_CascadeInvalidBlock(gt *testing.T) {
 
 	// Create a message with a conflicting payload on chain B, that also emits an initiating message
 	system.AddL2Block(actors.ChainB, dsl.WithL2BlockTransactions(
-		system.InboxContract.Execute(alice, chainAInitTx.Identifier(), []byte("this message was never emitted")),
+		system.InboxContract.Execute(alice, chainAInitTx, dsl.WithPayload([]byte("this message was never emitted"))),
 		emitterContract.EmitMessage(alice, "chainB message"),
 	), dsl.WithL1BlockCrossUnsafe())
 	chainBExecTx := system.InboxContract.LastTransaction()
@@ -397,8 +478,8 @@ func TestInteropFaultProofs_CascadeInvalidBlock(gt *testing.T) {
 	// Create a message with a valid message on chain A, pointing to the initiating message on B from the same block
 	// as an invalid message.
 	system.AddL2Block(actors.ChainA,
-		dsl.WithL2BlockTransactions(system.InboxContract.Execute(alice, chainBInitTx.Identifier(), chainBInitTx.MessagePayload())),
-		// Block becomes cross-unsafe because the init msg is currently present, but it should not become cross-safe.
+		dsl.WithL2BlockTransactions(system.InboxContract.Execute(alice, chainBInitTx)),
+		dsl.WithL1BlockCrossUnsafe(),
 	)
 	chainAExecTx := system.InboxContract.LastTransaction()
 	chainAExecTx.CheckIncluded()
@@ -411,7 +492,7 @@ func TestInteropFaultProofs_CascadeInvalidBlock(gt *testing.T) {
 	startTimestamp := endTimestamp - 1
 	optimisticEnd := system.Outputs.SuperRoot(endTimestamp)
 
-	preConsolidation := system.Outputs.TransitionState(startTimestamp, 1023,
+	preConsolidation := system.Outputs.TransitionState(startTimestamp, consolidateStep,
 		system.Outputs.OptimisticBlockAtTimestamp(actors.ChainA, endTimestamp),
 		system.Outputs.OptimisticBlockAtTimestamp(actors.ChainB, endTimestamp),
 	).Marshal()
@@ -430,7 +511,7 @@ func TestInteropFaultProofs_CascadeInvalidBlock(gt *testing.T) {
 			name:               "Consolidate-ExpectInvalidPendingBlock",
 			agreedClaim:        preConsolidation,
 			disputedClaim:      optimisticEnd.Marshal(),
-			disputedTraceIndex: 1023,
+			disputedTraceIndex: consolidateStep,
 			expectValid:        false,
 			// TODO(#14306): Support cascading re-orgs in op-program
 			skipProgram:    true,
@@ -440,11 +521,83 @@ func TestInteropFaultProofs_CascadeInvalidBlock(gt *testing.T) {
 			name:               "Consolidate-ReplaceInvalidBlocks",
 			agreedClaim:        preConsolidation,
 			disputedClaim:      crossSafeEnd.Marshal(),
-			disputedTraceIndex: 1023,
+			disputedTraceIndex: consolidateStep,
 			expectValid:        true,
 			// TODO(#14306): Support cascading re-orgs in op-program
 			skipProgram:    true,
 			skipChallenger: true,
+		},
+	}
+	runFppAndChallengerTests(gt, system, tests)
+}
+
+func TestInteropFaultProofs_MessageExpiry(gt *testing.T) {
+	t := helpers.NewDefaultTesting(gt)
+	system := dsl.NewInteropDSL(t)
+
+	actors := system.Actors
+	alice := system.CreateUser()
+	emitterContract := dsl.NewEmitterContract(t)
+	system.AddL2Block(actors.ChainA, dsl.WithL2BlockTransactions(
+		emitterContract.Deploy(alice),
+	))
+	system.AddL2Block(actors.ChainA, dsl.WithL2BlockTransactions(
+		emitterContract.EmitMessage(alice, "test message"),
+	))
+	emitTx := emitterContract.LastEmittedMessage()
+
+	// Bring ChainB to the same height and timestamp
+	system.AddL2Block(actors.ChainB, dsl.WithL2BlocksUntilTimestamp(actors.ChainA.Sequencer.L2Unsafe().Time))
+	system.SubmitBatchData()
+
+	// Advance the chain until the init msg expires
+	msgExpiryTime := system.DepSet().MessageExpiryWindow()
+	end := emitTx.Identifier().Timestamp.Uint64() + msgExpiryTime
+	system.AddL2Block(actors.ChainA, dsl.WithL2BlocksUntilTimestamp(end))
+	system.AddL2Block(actors.ChainB, dsl.WithL2BlocksUntilTimestamp(end))
+	system.SubmitBatchData()
+
+	system.AddL2Block(actors.ChainB, func(opts *dsl.AddL2BlockOpts) {
+		opts.TransactionCreators = []dsl.TransactionCreator{system.InboxContract.Execute(alice, emitTx)}
+		opts.BlockIsNotCrossUnsafe = true
+	})
+	system.AddL2Block(actors.ChainA)
+
+	system.SubmitBatchData(func(opts *dsl.SubmitBatchDataOpts) {
+		opts.SkipCrossSafeUpdate = true
+	})
+	execTx := system.InboxContract.LastTransaction()
+	execTx.CheckIncluded()
+
+	endTimestamp := actors.ChainB.Sequencer.L2Unsafe().Time
+	startTimestamp := endTimestamp - 1
+	optimisticEnd := system.Outputs.SuperRoot(endTimestamp)
+
+	preConsolidation := system.Outputs.TransitionState(startTimestamp, consolidateStep,
+		system.Outputs.OptimisticBlockAtTimestamp(actors.ChainA, endTimestamp),
+		system.Outputs.OptimisticBlockAtTimestamp(actors.ChainB, endTimestamp),
+	).Marshal()
+
+	// Induce block replacement
+	system.ProcessCrossSafe()
+	// assert that the invalid message txs were reorged out
+	execTx.CheckNotIncluded()
+	crossSafeEnd := system.Outputs.SuperRoot(endTimestamp)
+
+	tests := []*transitionTest{
+		{
+			name:               "Consolidate-ExpectInvalidPendingBlock",
+			agreedClaim:        preConsolidation,
+			disputedClaim:      optimisticEnd.Marshal(),
+			disputedTraceIndex: consolidateStep,
+			expectValid:        false,
+		},
+		{
+			name:               "Consolidate-ReplaceInvalidBlocks",
+			agreedClaim:        preConsolidation,
+			disputedClaim:      crossSafeEnd.Marshal(),
+			disputedTraceIndex: consolidateStep,
+			expectValid:        true,
 		},
 	}
 	runFppAndChallengerTests(gt, system, tests)
@@ -474,7 +627,7 @@ func TestInteropFaultProofsInvalidBlock(gt *testing.T) {
 	// Create a message with a conflicting payload
 	fakeMessage := []byte("this message was never emitted")
 	system.AddL2Block(actors.ChainB, func(opts *dsl.AddL2BlockOpts) {
-		opts.TransactionCreators = []dsl.TransactionCreator{system.InboxContract.Execute(alice, emitTx.Identifier(), fakeMessage)}
+		opts.TransactionCreators = []dsl.TransactionCreator{system.InboxContract.Execute(alice, emitTx, dsl.WithPayload(fakeMessage))}
 		opts.BlockIsNotCrossUnsafe = true
 	})
 	system.AddL2Block(actors.ChainA)
@@ -536,8 +689,6 @@ func TestInteropFaultProofsInvalidBlock(gt *testing.T) {
 			disputedClaim:      step2Expected,
 			disputedTraceIndex: 1,
 			expectValid:        true,
-			// skipChallenger because the challenger's reorg view won't match the pre-reorg disputed claim
-			skipChallenger: true,
 		},
 		{
 			name:               "FirstPaddingStep",
@@ -545,8 +696,6 @@ func TestInteropFaultProofsInvalidBlock(gt *testing.T) {
 			disputedClaim:      paddingStep(3),
 			disputedTraceIndex: 2,
 			expectValid:        true,
-			// skipChallenger because the challenger's reorg view won't match the pre-reorg disputed claim
-			skipChallenger: true,
 		},
 		{
 			name:               "SecondPaddingStep",
@@ -554,33 +703,27 @@ func TestInteropFaultProofsInvalidBlock(gt *testing.T) {
 			disputedClaim:      paddingStep(4),
 			disputedTraceIndex: 3,
 			expectValid:        true,
-			// skipChallenger because the challenger's reorg view won't match the pre-reorg disputed claim
-			skipChallenger: true,
 		},
 		{
 			name:               "LastPaddingStep",
-			agreedClaim:        paddingStep(1022),
-			disputedClaim:      paddingStep(1023),
-			disputedTraceIndex: 1022,
+			agreedClaim:        paddingStep(consolidateStep - 1),
+			disputedClaim:      paddingStep(consolidateStep),
+			disputedTraceIndex: consolidateStep - 1,
 			expectValid:        true,
-			// skipChallenger because the challenger's reorg view won't match the pre-reorg disputed claim
-			skipChallenger: true,
 		},
 		{
 			name:               "Consolidate-ExpectInvalidPendingBlock",
-			agreedClaim:        paddingStep(1023),
+			agreedClaim:        paddingStep(consolidateStep),
 			disputedClaim:      end.Marshal(),
-			disputedTraceIndex: 1023,
+			disputedTraceIndex: consolidateStep,
 			expectValid:        false,
-			skipChallenger:     true,
 		},
 		{
 			name:               "Consolidate-ReplaceInvalidBlock",
-			agreedClaim:        paddingStep(1023),
+			agreedClaim:        paddingStep(consolidateStep),
 			disputedClaim:      crossSafeSuperRootEnd.Marshal(),
-			disputedTraceIndex: 1023,
+			disputedTraceIndex: consolidateStep,
 			expectValid:        true,
-			skipChallenger:     true,
 		},
 		{
 			name:               "AlreadyAtClaimedTimestamp",
@@ -626,7 +769,7 @@ func runFppAndChallengerTests(gt *testing.T, system *dsl.InteropDSL, tests []*tr
 	for _, test := range tests {
 		test := test
 		gt.Run(fmt.Sprintf("%s-fpp", test.name), func(gt *testing.T) {
-			runFppTest(gt, test, system.Actors)
+			runFppTest(gt, test, system.Actors, system.DepSet())
 		})
 
 		gt.Run(fmt.Sprintf("%s-challenger", test.name), func(gt *testing.T) {
@@ -635,7 +778,7 @@ func runFppAndChallengerTests(gt *testing.T, system *dsl.InteropDSL, tests []*tr
 	}
 }
 
-func runFppTest(gt *testing.T, test *transitionTest, actors *dsl.InteropActors) {
+func runFppTest(gt *testing.T, test *transitionTest, actors *dsl.InteropActors, depSet *depset.StaticConfigDependencySet) {
 	t := helpers.NewDefaultTesting(gt)
 	if test.skipProgram {
 		t.Skip("Not yet implemented")
@@ -659,7 +802,7 @@ func runFppTest(gt *testing.T, test *transitionTest, actors *dsl.InteropActors) 
 		logger,
 		actors.L1Miner,
 		checkResult,
-		WithInteropEnabled(actors, test.agreedClaim, crypto.Keccak256Hash(test.disputedClaim), proposalTimestamp),
+		WithInteropEnabled(t, actors, depSet, test.agreedClaim, crypto.Keccak256Hash(test.disputedClaim), proposalTimestamp),
 		fpHelpers.WithL1Head(l1Head),
 	)
 }
@@ -676,7 +819,7 @@ func runChallengerTest(gt *testing.T, test *transitionTest, actors *dsl.InteropA
 		endTimestamp = actors.ChainA.Sequencer.L2Unsafe().Time
 	}
 	startTimestamp := actors.ChainA.Sequencer.L2Unsafe().Time - 1
-	prestateProvider := super.NewSuperRootPrestateProvider(&actors.Supervisor.QueryFrontend, startTimestamp)
+	prestateProvider := super.NewSuperRootPrestateProvider(actors.Supervisor, startTimestamp)
 	var l1Head eth.BlockID
 	if test.l1Head == (common.Hash{}) {
 		l1Head = eth.ToBlockID(eth.HeaderBlockInfo(actors.L1Miner.L1Chain().CurrentBlock()))
@@ -686,7 +829,7 @@ func runChallengerTest(gt *testing.T, test *transitionTest, actors *dsl.InteropA
 	gameDepth := challengerTypes.Depth(30)
 	rollupCfgs, err := super.NewRollupConfigsFromParsed(actors.ChainA.RollupCfg, actors.ChainB.RollupCfg)
 	require.NoError(t, err)
-	provider := super.NewSuperTraceProvider(logger, rollupCfgs, prestateProvider, &actors.Supervisor.QueryFrontend, l1Head, gameDepth, startTimestamp, endTimestamp)
+	provider := super.NewSuperTraceProvider(logger, rollupCfgs, prestateProvider, actors.Supervisor, l1Head, gameDepth, startTimestamp, endTimestamp)
 	var agreedPrestate []byte
 	if test.disputedTraceIndex > 0 {
 		agreedPrestate, err = provider.GetPreimageBytes(t.Ctx(), challengerTypes.NewPosition(gameDepth, big.NewInt(test.disputedTraceIndex-1)))
@@ -707,13 +850,14 @@ func runChallengerTest(gt *testing.T, test *transitionTest, actors *dsl.InteropA
 	}
 }
 
-func WithInteropEnabled(actors *dsl.InteropActors, agreedPrestate []byte, disputedClaim common.Hash, claimTimestamp uint64) fpHelpers.FixtureInputParam {
+func WithInteropEnabled(t helpers.StatefulTesting, actors *dsl.InteropActors, depSet *depset.StaticConfigDependencySet, agreedPrestate []byte, disputedClaim common.Hash, claimTimestamp uint64) fpHelpers.FixtureInputParam {
 	return func(f *fpHelpers.FixtureInputs) {
 		f.InteropEnabled = true
 		f.AgreedPrestate = agreedPrestate
 		f.L2OutputRoot = crypto.Keccak256Hash(agreedPrestate)
 		f.L2Claim = disputedClaim
 		f.L2BlockNumber = claimTimestamp
+		f.DependencySet = depSet
 
 		for _, chain := range []*dsl.Chain{actors.ChainA, actors.ChainB} {
 			f.L2Sources = append(f.L2Sources, &fpHelpers.FaultProofProgramL2Source{
