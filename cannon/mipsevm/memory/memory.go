@@ -161,16 +161,6 @@ func (m *Memory) PageLookup(pageIndex Word) (*CachedPage, bool) {
 	return p, ok
 }
 
-func (m *Memory) Mmap(addr, size, newheap Word) {
-	// for _, region := range m.mappedRegions {
-	// 	if region.AddrInRegion(addr) {
-	// 		region.data = region.data[:addr-region.start_addr+size]
-	// 		break
-	// 	}
-	// }
-	fmt.Printf("Mmap addr: %x size: %x newheap: %x\n", addr, size, newheap)
-}
-
 func (m *Memory) SetMemoryRange(addr Word, r io.Reader) error {
 	for {
 		pageIndex := addr >> PageAddrSize
