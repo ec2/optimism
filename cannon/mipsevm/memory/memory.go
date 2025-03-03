@@ -66,6 +66,10 @@ type PageIndex interface {
 	setPageBacking(pages map[Word]*CachedPage)
 }
 
+func NewMemory() *Memory {
+	return NewBinaryTreeMemory()
+}
+
 func (m *Memory) MerkleRoot() [32]byte {
 	return m.MerkleizeSubtree(1)
 }
