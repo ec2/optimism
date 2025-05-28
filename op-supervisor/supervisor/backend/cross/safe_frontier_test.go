@@ -4,37 +4,22 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/ethereum-optimism/optimism/op-service/eth"
-	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/backend/depset"
-	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/types"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ethereum-optimism/optimism/op-service/eth"
+	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/types"
 )
 
 func TestHazardSafeFrontierChecks(t *testing.T) {
 	t.Run("empty hazards", func(t *testing.T) {
 		sfcd := &mockSafeFrontierCheckDeps{}
 		l1Source := eth.BlockID{}
-		hazards := map[types.ChainIndex]types.BlockSeal{}
+		hazards := map[eth.ChainID]types.BlockSeal{}
 		// when there are no hazards,
 		// no work is done, and no error is returned
 		err := HazardSafeFrontierChecks(sfcd, l1Source, NewHazardSetFromEntries(hazards))
 		require.NoError(t, err)
-	})
-	t.Run("unknown chain", func(t *testing.T) {
-		sfcd := &mockSafeFrontierCheckDeps{
-			deps: mockDependencySet{
-				chainIDFromIndexfn: func() (eth.ChainID, error) {
-					return eth.ChainID{}, types.ErrUnknownChain
-				},
-			},
-		}
-		l1Source := eth.BlockID{}
-		hazards := map[types.ChainIndex]types.BlockSeal{types.ChainIndex(0): {}}
-		// when there is one hazard, and ChainIDFromIndex returns ErrUnknownChain,
-		// an error is returned as a ErrConflict
-		err := HazardSafeFrontierChecks(sfcd, l1Source, NewHazardSetFromEntries(hazards))
-		require.ErrorIs(t, err, types.ErrConflict)
 	})
 	t.Run("initSource in scope", func(t *testing.T) {
 		sfcd := &mockSafeFrontierCheckDeps{}
@@ -42,7 +27,7 @@ func TestHazardSafeFrontierChecks(t *testing.T) {
 			return types.BlockSeal{Number: 1}, nil
 		}
 		l1Source := eth.BlockID{Number: 2}
-		hazards := map[types.ChainIndex]types.BlockSeal{types.ChainIndex(0): {}}
+		hazards := map[eth.ChainID]types.BlockSeal{eth.ChainIDFromUInt64(123): {}}
 		// when there is one hazard, and CrossSource returns a BlockSeal within scope
 		// (ie the hazard's block number is less than or equal to the source block number),
 		// no error is returned
@@ -55,7 +40,7 @@ func TestHazardSafeFrontierChecks(t *testing.T) {
 			return types.BlockSeal{Number: 3}, nil
 		}
 		l1Source := eth.BlockID{Number: 2}
-		hazards := map[types.ChainIndex]types.BlockSeal{types.ChainIndex(0): {}}
+		hazards := map[eth.ChainID]types.BlockSeal{eth.ChainIDFromUInt64(123): {}}
 		// when there is one hazard, and CrossSource returns a BlockSeal out of scope
 		// (ie the hazard's block number is greater than the source block number),
 		// an error is returned as a ErrOutOfScope
@@ -74,7 +59,7 @@ func TestHazardSafeFrontierChecks(t *testing.T) {
 				errors.New("some error")
 		}
 		l1Source := eth.BlockID{}
-		hazards := map[types.ChainIndex]types.BlockSeal{types.ChainIndex(0): {}}
+		hazards := map[eth.ChainID]types.BlockSeal{eth.ChainIDFromUInt64(123): {}}
 		// when there is one hazard, and CrossSource returns an ErrFuture,
 		// and CandidateCrossSafe returns an error,
 		// the error from CandidateCrossSafe is returned
@@ -93,7 +78,7 @@ func TestHazardSafeFrontierChecks(t *testing.T) {
 			}, nil
 		}
 		l1Source := eth.BlockID{}
-		hazards := map[types.ChainIndex]types.BlockSeal{types.ChainIndex(0): {Number: 3, Hash: common.BytesToHash([]byte{0x02})}}
+		hazards := map[eth.ChainID]types.BlockSeal{eth.ChainIDFromUInt64(123): {Number: 3, Hash: common.BytesToHash([]byte{0x02})}}
 		// when there is one hazard, and CrossSource returns an ErrFuture,
 		// and CandidateCrossSafe returns a candidate that does not match the hazard,
 		// (ie the candidate's block number is the same as the hazard's block number, but the hashes are different),
@@ -113,7 +98,7 @@ func TestHazardSafeFrontierChecks(t *testing.T) {
 				nil
 		}
 		l1Source := eth.BlockID{Number: 8}
-		hazards := map[types.ChainIndex]types.BlockSeal{types.ChainIndex(0): {Number: 3, Hash: common.BytesToHash([]byte{0x02})}}
+		hazards := map[eth.ChainID]types.BlockSeal{eth.ChainIDFromUInt64(123): {Number: 3, Hash: common.BytesToHash([]byte{0x02})}}
 		// when there is one hazard, and CrossSource returns an ErrFuture,
 		// and the initSource is out of scope,
 		// an error is returned as a ErrOutOfScope
@@ -132,7 +117,7 @@ func TestHazardSafeFrontierChecks(t *testing.T) {
 			}, nil
 		}
 		l1Source := eth.BlockID{Number: 8}
-		hazards := map[types.ChainIndex]types.BlockSeal{types.ChainIndex(0): {Number: 3, Hash: common.BytesToHash([]byte{0x02})}}
+		hazards := map[eth.ChainID]types.BlockSeal{eth.ChainIDFromUInt64(123): {Number: 3, Hash: common.BytesToHash([]byte{0x02})}}
 		// when there is one hazard, and CrossSource returns an ErrFuture,
 		// and the initSource is out of scope,
 		// an error is returned as a ErrOutOfScope
@@ -142,7 +127,6 @@ func TestHazardSafeFrontierChecks(t *testing.T) {
 }
 
 type mockSafeFrontierCheckDeps struct {
-	deps                 mockDependencySet
 	candidateCrossSafeFn func() (candidate types.DerivedBlockRefPair, err error)
 	crossSourceFn        func() (source types.BlockSeal, err error)
 }
@@ -159,61 +143,4 @@ func (m *mockSafeFrontierCheckDeps) CrossDerivedToSource(chainID eth.ChainID, de
 		return m.crossSourceFn()
 	}
 	return types.BlockSeal{}, nil
-}
-
-func (m *mockSafeFrontierCheckDeps) DependencySet() depset.DependencySet {
-	return m.deps
-}
-
-type mockDependencySet struct {
-	chainIDFromIndexfn  func() (eth.ChainID, error)
-	canExecuteAtfn      func() (bool, error)
-	canInitiateAtfn     func() (bool, error)
-	messageExpiryWindow uint64
-}
-
-func (m mockDependencySet) CanExecuteAt(chain eth.ChainID, timestamp uint64) (bool, error) {
-	if m.canExecuteAtfn != nil {
-		return m.canExecuteAtfn()
-	}
-	return true, nil
-}
-
-func (m mockDependencySet) CanInitiateAt(chain eth.ChainID, timestamp uint64) (bool, error) {
-	if m.canInitiateAtfn != nil {
-		return m.canInitiateAtfn()
-	}
-	return true, nil
-}
-
-func (m mockDependencySet) ChainIDFromIndex(index types.ChainIndex) (eth.ChainID, error) {
-	if m.chainIDFromIndexfn != nil {
-		return m.chainIDFromIndexfn()
-	}
-	id := eth.ChainIDFromUInt64(uint64(index) - 1000)
-	return id, nil
-}
-
-func (m mockDependencySet) ChainIndexFromID(chain eth.ChainID) (types.ChainIndex, error) {
-	v, err := chain.ToUInt32()
-	if err != nil {
-		return 0, err
-	}
-	// offset, so we catch improper manual conversion that doesn't apply this offset
-	return types.ChainIndex(v + 1000), nil
-}
-
-func (m mockDependencySet) Chains() []eth.ChainID {
-	return nil
-}
-
-func (m mockDependencySet) HasChain(chain eth.ChainID) bool {
-	return true
-}
-
-func (m mockDependencySet) MessageExpiryWindow() uint64 {
-	if m.messageExpiryWindow == 0 {
-		return 100
-	}
-	return m.messageExpiryWindow
 }

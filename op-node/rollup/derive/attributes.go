@@ -13,6 +13,11 @@ import (
 	"github.com/ethereum-optimism/optimism/op-service/predeploys"
 )
 
+type DependencySet interface {
+	// Chains returns the number of chains in the dependency set
+	Chains() []eth.ChainID
+}
+
 // L1ReceiptsFetcher fetches L1 header info and receipts for the payload attributes derivation (the info tx and deposits)
 type L1ReceiptsFetcher interface {
 	InfoByHash(ctx context.Context, hash common.Hash) (eth.BlockInfo, error)
@@ -132,19 +137,20 @@ func (ba *FetchingAttributesBuilder) PreparePayloadAttributes(ctx context.Contex
 		upgradeTxs = append(upgradeTxs, isthmus...)
 	}
 
+	if ba.rollupCfg.IsInteropActivationBlock(nextL2Time) {
+		interop, err := InteropNetworkUpgradeTransactions()
+		if err != nil {
+			return nil, NewCriticalError(fmt.Errorf("failed to build interop network upgrade txs: %w", err))
+		}
+		upgradeTxs = append(upgradeTxs, interop...)
+	}
+
 	l1InfoTx, err := L1InfoDepositBytes(ba.rollupCfg, sysConfig, seqNumber, l1Info, nextL2Time)
 	if err != nil {
 		return nil, NewCriticalError(fmt.Errorf("failed to create l1InfoTx: %w", err))
 	}
 
 	var afterForceIncludeTxs []hexutil.Bytes
-	if ba.rollupCfg.IsInterop(nextL2Time) {
-		depositsCompleteTx, err := DepositsCompleteBytes(seqNumber, l1Info)
-		if err != nil {
-			return nil, NewCriticalError(fmt.Errorf("failed to create depositsCompleteTx: %w", err))
-		}
-		afterForceIncludeTxs = append(afterForceIncludeTxs, depositsCompleteTx)
-	}
 
 	txs := make([]hexutil.Bytes, 0, 1+len(depositTxs)+len(afterForceIncludeTxs)+len(upgradeTxs))
 	txs = append(txs, l1InfoTx)

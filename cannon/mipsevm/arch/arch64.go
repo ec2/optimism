@@ -1,6 +1,3 @@
-//go:build cannon64
-// +build cannon64
-
 package arch
 
 import "encoding/binary"
@@ -54,6 +51,7 @@ const (
 	UndefinedSysNr = ^Word(0)
 
 	SysMunmap        = 5011
+	SysMprotect      = 5010
 	SysGetAffinity   = 5196
 	SysMadvise       = 5027
 	SysRtSigprocmask = 5014
@@ -83,6 +81,7 @@ const (
 	SysTgkill        = 5225
 	SysGetRLimit     = 5095
 	SysLseek         = 5008
+	SysEventFd2      = 5284
 	// Profiling-related syscalls
 	SysSetITimer    = 5036
 	SysTimerCreate  = 5216

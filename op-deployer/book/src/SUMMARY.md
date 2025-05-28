@@ -6,9 +6,11 @@
 
 - [Installation](user-guide/installation.md)
 - [Usage](user-guide/usage.md)
+  - [bootstrap](user-guide/bootstrap.md)
   - [init](user-guide/init.md)
   - [apply](user-guide/apply.md)
-  - [bootstrap](user-guide/bootstrap.md)
+  - [verify](user-guide/verify.md)
+  - [upgrade](user-guide/upgrade.md)
 - [Known Limitations](user-guide/known-limitations.md)
 
 # Reference Guide

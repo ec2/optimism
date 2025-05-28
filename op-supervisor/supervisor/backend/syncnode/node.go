@@ -10,6 +10,7 @@ import (
 
 	"github.com/ethereum-optimism/optimism/op-service/rpc"
 	gethrpc "github.com/ethereum/go-ethereum/rpc"
+	"github.com/gorilla/websocket"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/log"
@@ -28,11 +29,13 @@ type backend interface {
 	CrossSafe(ctx context.Context, chainID eth.ChainID) (pair types.DerivedIDPair, err error)
 	Finalized(ctx context.Context, chainID eth.ChainID) (eth.BlockID, error)
 
+	AnchorPoint(ctx context.Context, chainID eth.ChainID) (types.DerivedBlockSealPair, error)
+
 	FindSealedBlock(ctx context.Context, chainID eth.ChainID, number uint64) (eth.BlockID, error)
 	IsLocalSafe(ctx context.Context, chainID eth.ChainID, block eth.BlockID) error
 	IsCrossSafe(ctx context.Context, chainID eth.ChainID, block eth.BlockID) error
 	IsLocalUnsafe(ctx context.Context, chainID eth.ChainID, block eth.BlockID) error
-	SafeDerivedAt(ctx context.Context, chainID eth.ChainID, source eth.BlockID) (derived eth.BlockID, err error)
+	LocalSafeDerivedAt(ctx context.Context, chainID eth.ChainID, source eth.BlockID) (derived eth.BlockID, err error)
 	L1BlockRefByNumber(ctx context.Context, number uint64) (eth.L1BlockRef, error)
 }
 
@@ -155,7 +158,18 @@ func (m *ManagedNode) SubscribeToNodeEvents() {
 		func(ctx context.Context, prevErr error) (gethevent.Subscription, error) {
 			if prevErr != nil {
 				// This is the RPC runtime error, not the setup error we have logging for below.
-				m.log.Error("RPC subscription failed, restarting now", "err", prevErr)
+				m.log.Warn("RPC subscription failed, retrying", "err", prevErr)
+				var closeErr *websocket.CloseError
+				if errors.As(prevErr, &closeErr) {
+					m.log.Warn("RPC websocket connection closed")
+					if err := m.Node.ReconnectRPC(m.ctx); err != nil {
+						m.log.Warn("RPC websocket reconnection failed", "err", err)
+					} else {
+						m.log.Info("RPC websocket connection reopened")
+					}
+				}
+				// When the subscription fails, the channel may have been immediately closed
+				m.nodeEvents = make(chan *types.ManagedEvent, 10)
 			}
 			sub, err := m.Node.SubscribeEvents(ctx, m.nodeEvents)
 			if err != nil {
@@ -202,7 +216,13 @@ func (m *ManagedNode) Start() {
 			case <-m.ctx.Done():
 				m.log.Info("Exiting node syncing")
 				return
-			case ev := <-m.nodeEvents: // nil, indefinitely blocking, if no node-events subscriber is set up.
+			case ev, ok := <-m.nodeEvents: // nil, indefinitely blocking, if no node-events subscriber is set up.
+				if !ok {
+					m.log.Info("Node events channel closed")
+					// indefinitely loop until node-event channel is reinitialized.
+					time.Sleep(500 * time.Millisecond)
+					continue
+				}
 				m.onNodeEvent(ev)
 			}
 		}
@@ -264,16 +284,16 @@ func (m *ManagedNode) onResetEvent(errStr string) {
 func (m *ManagedNode) onUpdateLocalSafeFailed(ev superevents.UpdateLocalSafeFailedEvent) {
 	switch {
 	case errors.Is(ev.Err, types.ErrConflict):
-		m.log.Warn("DB indicated a conflict, checking consistency")
+		m.log.Warn("DB indicated a conflict with this node, checking if node is inconsistent")
 		m.resetIfInconsistent()
 	case errors.Is(ev.Err, types.ErrFuture):
-		m.log.Warn("DB indicated an update is in the future, checking if node is ahead")
+		m.log.Warn("DB indicated this node provided an update from the future, checking if node is ahead")
 		m.resetIfAhead()
 	}
 }
 
-// OnResetReady handles a reset-ready event from the supervisor
-// once the supervisor has determined the reset target by bisecting the search range
+// OnResetReady handles a fully qualified reset command to the node
+// it is called by the resetTracker when the reset is ready to be executed
 func (m *ManagedNode) OnResetReady(lUnsafe, xUnsafe, lSafe, xSafe, finalized eth.BlockID) {
 	m.log.Info("Reset ready event received",
 		"localUnsafe", lUnsafe,
@@ -407,6 +427,10 @@ func (m *ManagedNode) onReplaceBlock(replacement types.BlockReplacement) {
 		ChainID:     m.chainID,
 		Replacement: replacement,
 	})
+	// if the node replaced a block, both the unsafe and safe are reset to this point
+	m.lastNodeLocalSafe = replacement.Replacement.ID()
+	m.lastNodeLocalUnsafe = replacement.Replacement.ID()
+	m.resetIfInconsistent()
 }
 
 func (m *ManagedNode) Close() error {
@@ -425,36 +449,33 @@ func (m *ManagedNode) Close() error {
 func (m *ManagedNode) resetIfInconsistent() {
 	ctx, cancel := context.WithTimeout(m.ctx, internalTimeout)
 	defer cancel()
-
-	var last eth.BlockID
-
-	// check if the last unsafe block we saw is consistent with the logs db
-	err := m.backend.IsLocalUnsafe(ctx, m.chainID, m.lastNodeLocalUnsafe)
-	if errors.Is(err, types.ErrConflict) {
-		m.log.Warn("local unsafe block is inconsistent with logs db. Initiating reset",
-			"lastUnsafeblock", m.lastNodeLocalUnsafe,
-			"err", err)
-		last = m.lastNodeLocalUnsafe
+	seenFromNode := m.lastNodeLocalSafe
+	name := "local-safe"
+	if seenFromNode == (eth.BlockID{}) {
+		return // if we haven't seen anything, then don't reset to it
 	}
-
-	// check if the last safe block we saw is consistent with the local safe db
-	err = m.backend.IsLocalSafe(ctx, m.chainID, m.lastNodeLocalSafe)
-	if errors.Is(err, types.ErrConflict) {
-		m.log.Warn("local safe block is inconsistent with logs db. Initiating reset",
-			"lastSafeblock", m.lastNodeLocalSafe,
-			"err", err)
-		last = m.lastNodeLocalSafe
+	m.log.Debug("Checking last seen block from node for consistency", "safety", name, "block", seenFromNode)
+	localSafeMatchErr := m.backend.IsLocalSafe(ctx, m.chainID, seenFromNode)
+	if localSafeMatchErr == nil {
+		return
 	}
-
-	// there is inconsistency. begin the reset process
-	if last != (eth.BlockID{}) {
-		m.resetTracker.beginBisectionReset(last)
-	} else {
-		m.log.Debug("no inconsistency found")
+	if errors.Is(localSafeMatchErr, types.ErrFuture) {
+		m.log.Debug("node is ahead of op-supervisor local-safe data")
+		return // resetIfAhead will handle this
 	}
+	m.log.Warn("Last seen block from node is inconsistent with supervisor local-safe blocks",
+		"safety", name, "err", localSafeMatchErr)
+	// If there is a mismatch, we want to reset back no further than latest local-safe
+	localSafe, err := m.backend.LocalSafe(ctx, m.chainID)
+	if err != nil {
+		m.log.Debug("Cannot determine how to handle inconsistency, no local-safe data available",
+			"localSafeMatchErr", localSafeMatchErr, "err", err)
+		return
+	}
+	m.resetTracker.beginBisectionReset(localSafe.Derived)
 }
 
-// resetIfAhead checks if the node is ahead of the logs db
+// resetIfAhead checks if the node is ahead of the local-safe db
 // and initiates a bisection based reset preparation if it is
 func (m *ManagedNode) resetIfAhead() {
 	ctx, cancel := context.WithTimeout(m.ctx, internalTimeout)
@@ -477,14 +498,17 @@ func (m *ManagedNode) resetIfAhead() {
 }
 
 // resetFullRange resets the node using the last block in the db
-// as the end of the range to search for the last consistent block
+// as the end of the range to search for the last consistent local-safe block.
+// The reset can take care of preserving the unsafe chain that extends the local-safe chain.
+// We do not want to reset deeper than local-safe,
+// to maintain a local-safe block that reorgs out unsafe data.
 func (m *ManagedNode) resetFullRange() {
 	internalCtx, iCancel := context.WithTimeout(m.ctx, internalTimeout)
 	defer iCancel()
-	dbLast, err := m.backend.LocalUnsafe(internalCtx, m.chainID)
+	dbLast, err := m.backend.LocalSafe(internalCtx, m.chainID)
 	if err != nil {
-		m.log.Error("failed to get last local unsafe block", "err", err)
+		m.log.Error("failed to get last local safe block", "err", err)
 		return
 	}
-	m.resetTracker.beginBisectionReset(dbLast)
+	m.resetTracker.beginBisectionReset(dbLast.Derived)
 }

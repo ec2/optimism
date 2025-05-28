@@ -113,6 +113,10 @@ func (s *ChainProcessor) OnEvent(ev event.Event) bool {
 }
 
 func (s *ChainProcessor) onRequest(target uint64) {
+	if target < s.nextNum() {
+		s.log.Debug("Indexing for target block already done", "target", target, "next", s.nextNum())
+		return
+	}
 	processed, err := s.rangeUpdate(target)
 	if err != nil {
 		if errors.Is(err, ethereum.NotFound) {
@@ -217,7 +221,7 @@ func (s *ChainProcessor) rangeUpdate(target uint64) (int, error) {
 			return
 		}
 		if err := s.rewinder.AcceptedBlock(s.chain, next.ID()); err != nil {
-			s.log.Warn("Cannot accept next block into events DB", "err", err)
+			s.log.Warn("Cannot accept next block into events DB", "next", next.ID(), "err", err)
 			result.err = err
 			return
 		}
@@ -285,7 +289,9 @@ func (s *ChainProcessor) process(ctx context.Context, next eth.BlockRef, receipt
 		if err := s.rewinder.Rewind(s.chain, next.ParentID()); err != nil {
 			// If any logs were written, our next attempt to write will fail and we'll retry this rewind.
 			// If no logs were written successfully then the rewind wouldn't have done anything anyway.
-			s.log.Error("Failed to rewind after error processing block", "block", next, "err", err)
+			s.log.Error("Failed to rewind after error processing block", "block", next, "parent", next.ParentID(), "err", err)
+		} else {
+			s.log.Debug("Successfully rewound database to the previous block", "block", next, "parent", next.ParentID())
 		}
 		return err
 	}

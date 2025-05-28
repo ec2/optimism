@@ -8,6 +8,7 @@ import (
 
 	"github.com/ethereum-optimism/optimism/op-node/rollup/event"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
+	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/backend/depset"
 	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/backend/superevents"
 	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/types"
 )
@@ -20,7 +21,7 @@ type CrossSafeDeps interface {
 
 	CandidateCrossSafe(chain eth.ChainID) (candidate types.DerivedBlockRefPair, err error)
 	NextSource(chain eth.ChainID, source eth.BlockID) (after eth.BlockRef, err error)
-	PreviousDerived(chain eth.ChainID, derived eth.BlockID) (prevDerived types.BlockSeal, err error)
+	PreviousCrossDerived(chain eth.ChainID, derived eth.BlockID) (prevDerived types.BlockSeal, err error)
 
 	OpenBlock(chainID eth.ChainID, blockNum uint64) (ref eth.BlockRef, logCount uint32, execMsgs map[uint32]*types.ExecutingMessage, err error)
 
@@ -34,11 +35,9 @@ type CrossSafeDeps interface {
 	InvalidateLocalSafe(chainID eth.ChainID, candidate types.DerivedBlockRefPair) error
 }
 
-func CrossSafeUpdate(logger log.Logger, chainID eth.ChainID, d CrossSafeDeps) error {
+func CrossSafeUpdate(logger log.Logger, chainID eth.ChainID, d CrossSafeDeps, linker depset.LinkChecker) error {
 	logger.Debug("Cross-safe update call")
-	// TODO(#11693): establish L1 reorg-lock of scopeDerivedFrom
-	// defer unlock once we are done checking the chain
-	candidate, err := scopedCrossSafeUpdate(logger, chainID, d)
+	candidate, err := scopedCrossSafeUpdate(logger, chainID, d, linker)
 	if err == nil {
 		// if we made progress, and no errors, then there is no need to bump the L1 scope yet.
 		return nil
@@ -70,7 +69,7 @@ func CrossSafeUpdate(logger log.Logger, chainID eth.ChainID, d CrossSafeDeps) er
 		// TODO: if genesis isn't cross-safe by default, then we can't register something as cross-safe here
 		return fmt.Errorf("failed to identify cross-safe scope to repeat: %w", err)
 	}
-	parent, err := d.PreviousDerived(chainID, currentCrossSafe.Derived.ID())
+	parent, err := d.PreviousCrossDerived(chainID, currentCrossSafe.Derived.ID())
 	if err != nil {
 		return fmt.Errorf("cannot find parent-block of cross-safe: %w", err)
 	}
@@ -86,21 +85,21 @@ func CrossSafeUpdate(logger log.Logger, chainID eth.ChainID, d CrossSafeDeps) er
 // If no L2 cross-safe progress can be made without additional L1 input data,
 // then a types.ErrOutOfScope error is returned,
 // with the current scope that will need to be expanded for further progress.
-func scopedCrossSafeUpdate(logger log.Logger, chainID eth.ChainID, d CrossSafeDeps) (update types.DerivedBlockRefPair, err error) {
+func scopedCrossSafeUpdate(logger log.Logger, chainID eth.ChainID, d CrossSafeDeps, linker depset.LinkChecker) (update types.DerivedBlockRefPair, err error) {
 	candidate, err := d.CandidateCrossSafe(chainID)
 	if err != nil {
 		return candidate, fmt.Errorf("failed to determine candidate block for cross-safe: %w", err)
 	}
 	logger.Debug("Candidate cross-safe", "scope", candidate.Source, "candidate", candidate.Derived)
 
-	hazards, err := CrossSafeHazards(d, logger, chainID, candidate.Source.ID(), types.BlockSealFromRef(candidate.Derived))
+	hazards, err := CrossSafeHazards(d, linker, logger, chainID, candidate.Source.ID(), types.BlockSealFromRef(candidate.Derived))
 	if err != nil {
 		return candidate, fmt.Errorf("failed to determine dependencies of cross-safe candidate %s: %w", candidate.Derived, err)
 	}
 	if err := HazardSafeFrontierChecks(d, candidate.Source.ID(), hazards); err != nil {
 		return candidate, fmt.Errorf("failed to verify block %s in cross-safe frontier: %w", candidate.Derived, err)
 	}
-	if err := HazardCycleChecks(d.DependencySet(), d, candidate.Derived.Time, hazards); err != nil {
+	if err := HazardCycleChecks(d, candidate.Derived.Time, hazards); err != nil {
 		return candidate, fmt.Errorf("failed to verify block %s in cross-safe check for cycle hazards: %w", candidate, err)
 	}
 
@@ -115,12 +114,13 @@ type CrossSafeWorker struct {
 	logger  log.Logger
 	chainID eth.ChainID
 	d       CrossSafeDeps
+	linker  depset.LinkChecker
 }
 
 func (c *CrossSafeWorker) OnEvent(ev event.Event) bool {
 	switch ev.(type) {
 	case superevents.UpdateCrossSafeRequestEvent:
-		if err := CrossSafeUpdate(c.logger, c.chainID, c.d); err != nil {
+		if err := CrossSafeUpdate(c.logger, c.chainID, c.d, c.linker); err != nil {
 			if errors.Is(err, types.ErrFuture) {
 				c.logger.Debug("Worker awaits additional blocks", "err", err)
 			} else {
@@ -135,11 +135,12 @@ func (c *CrossSafeWorker) OnEvent(ev event.Event) bool {
 
 var _ event.Deriver = (*CrossUnsafeWorker)(nil)
 
-func NewCrossSafeWorker(logger log.Logger, chainID eth.ChainID, d CrossSafeDeps) *CrossSafeWorker {
-	logger = logger.New("chain", chainID)
+func NewCrossSafeWorker(logger log.Logger, chainID eth.ChainID, d CrossSafeDeps, linker depset.LinkChecker) *CrossSafeWorker {
+	logger = logger.New("chain", chainID, "worker", "cross-safe")
 	return &CrossSafeWorker{
 		logger:  logger,
 		chainID: chainID,
 		d:       d,
+		linker:  linker,
 	}
 }

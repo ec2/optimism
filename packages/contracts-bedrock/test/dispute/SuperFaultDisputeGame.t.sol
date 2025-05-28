@@ -27,16 +27,20 @@ import { IDisputeGame } from "interfaces/dispute/IDisputeGame.sol";
 import { IPreimageOracle } from "interfaces/dispute/IBigStepper.sol";
 import { IAnchorStateRegistry } from "interfaces/dispute/IAnchorStateRegistry.sol";
 import { IFaultDisputeGame } from "interfaces/dispute/IFaultDisputeGame.sol";
+import { ISuperFaultDisputeGame } from "interfaces/dispute/ISuperFaultDisputeGame.sol";
 import { IDelayedWETH } from "interfaces/dispute/IDelayedWETH.sol";
 
 contract SuperFaultDisputeGame_Init is DisputeGameFactory_Init {
     /// @dev The type of the game being tested.
-    GameType internal constant GAME_TYPE = GameType.wrap(4);
+    GameType internal immutable GAME_TYPE = GameTypes.SUPER_CANNON;
+
+    /// @dev The initial bond for the game.
+    uint256 internal initBond;
 
     /// @dev The implementation of the game.
-    IFaultDisputeGame internal gameImpl;
+    ISuperFaultDisputeGame internal gameImpl;
     /// @dev The `Clone` proxy of the game.
-    IFaultDisputeGame internal gameProxy;
+    ISuperFaultDisputeGame internal gameProxy;
 
     /// @dev The extra data passed to the game for initialization.
     bytes internal extraData;
@@ -46,63 +50,31 @@ contract SuperFaultDisputeGame_Init is DisputeGameFactory_Init {
 
     event ReceiveETH(uint256 amount);
 
-    function init(Claim rootClaim, Claim absolutePrestate, uint256 l2BlockNumber) public {
+    function init(Claim rootClaim, Claim absolutePrestate, uint256 l2SequenceNumber) public {
         // Set the time to a realistic date.
         if (!isForkTest()) {
             vm.warp(1690906994);
         }
 
         // Set the extra data for the game creation
-        extraData = abi.encode(l2BlockNumber);
+        extraData = abi.encode(l2SequenceNumber);
 
-        // Set preimage oracle challenge period to something arbitrary (4 seconds) just so we can
-        // actually test the clock extensions later on. This is not a realistic value.
-        AlphabetVM _vm = new AlphabetVM(
-            absolutePrestate,
-            IPreimageOracle(
-                DeployUtils.create1({
-                    _name: "PreimageOracle",
-                    _args: DeployUtils.encodeConstructor(abi.encodeCall(IPreimageOracle.__constructor__, (0, 4)))
-                })
-            )
-        );
+        (address _impl, AlphabetVM _vm,) = setupSuperFaultDisputeGame(absolutePrestate);
+        gameImpl = ISuperFaultDisputeGame(_impl);
 
-        // Deploy an implementation of the fault game
-        gameImpl = IFaultDisputeGame(
-            DeployUtils.create1({
-                _name: "SuperFaultDisputeGame",
-                _args: DeployUtils.encodeConstructor(
-                    abi.encodeCall(
-                        IFaultDisputeGame.__constructor__,
-                        (
-                            IFaultDisputeGame.GameConstructorParams({
-                                gameType: GAME_TYPE,
-                                absolutePrestate: absolutePrestate,
-                                maxGameDepth: 2 ** 3,
-                                splitDepth: 2 ** 2,
-                                clockExtension: Duration.wrap(3 hours),
-                                maxClockDuration: Duration.wrap(3.5 days),
-                                vm: _vm,
-                                weth: delayedWeth,
-                                anchorStateRegistry: anchorStateRegistry,
-                                l2ChainId: 0
-                            })
-                        )
-                    )
-                )
-            })
-        );
-
-        // Register the game implementation with the factory.
-        disputeGameFactory.setImplementation(GAME_TYPE, gameImpl);
-        uint256 bondAmount = disputeGameFactory.initBonds(GAME_TYPE);
+        initBond = disputeGameFactory.initBonds(GAME_TYPE);
 
         vm.prank(superchainConfig.guardian());
-        optimismPortal2.setRespectedGameType(GAME_TYPE);
+        anchorStateRegistry.setRespectedGameType(GAME_TYPE);
+
+        // Warp ahead of the game retirement timestamp if needed.
+        if (block.timestamp <= anchorStateRegistry.retirementTimestamp()) {
+            vm.warp(anchorStateRegistry.retirementTimestamp() + 1);
+        }
 
         // Create a new game.
-        gameProxy = IFaultDisputeGame(
-            payable(address(disputeGameFactory.create{ value: bondAmount }(GAME_TYPE, rootClaim, extraData)))
+        gameProxy = ISuperFaultDisputeGame(
+            payable(address(disputeGameFactory.create{ value: initBond }(GAME_TYPE, rootClaim, extraData)))
         );
 
         // Check immutables
@@ -135,8 +107,8 @@ contract SuperFaultDisputeGame_Test is SuperFaultDisputeGame_Init {
     bytes internal absolutePrestateData;
     /// @dev The absolute prestate of the trace.
     Claim internal absolutePrestate;
-    /// @dev A valid l2BlockNumber that comes after the current anchor root block.
-    uint256 validL2BlockNumber;
+    /// @dev A valid l2SequenceNumber that comes after the current anchor root block.
+    uint256 validl2SequenceNumber;
 
     function setUp() public override {
         absolutePrestateData = abi.encode(0);
@@ -146,17 +118,17 @@ contract SuperFaultDisputeGame_Test is SuperFaultDisputeGame_Init {
 
         // Get the actual anchor roots
         (Hash root, uint256 l2Bn) = anchorStateRegistry.getAnchorRoot();
-        validL2BlockNumber = l2Bn + 1;
+        validl2SequenceNumber = l2Bn + 1;
 
         ROOT_CLAIM = Claim.wrap(Hash.unwrap(root));
 
         if (isForkTest()) {
-            // Set the init bond of anchor game type 0 to be 0.
+            // Set the init bond of anchor game type 4 to be 0.
             vm.store(
-                address(disputeGameFactory), keccak256(abi.encode(GameType.wrap(0), uint256(102))), bytes32(uint256(0))
+                address(disputeGameFactory), keccak256(abi.encode(GameType.wrap(4), uint256(102))), bytes32(uint256(0))
             );
         }
-        super.init({ rootClaim: ROOT_CLAIM, absolutePrestate: absolutePrestate, l2BlockNumber: validL2BlockNumber });
+        super.init({ rootClaim: ROOT_CLAIM, absolutePrestate: absolutePrestate, l2SequenceNumber: validl2SequenceNumber });
     }
 
     ////////////////////////////////////////////////////////////////
@@ -180,9 +152,9 @@ contract SuperFaultDisputeGame_Test is SuperFaultDisputeGame_Init {
             _name: "SuperFaultDisputeGame",
             _args: DeployUtils.encodeConstructor(
                 abi.encodeCall(
-                    IFaultDisputeGame.__constructor__,
+                    ISuperFaultDisputeGame.__constructor__,
                     (
-                        IFaultDisputeGame.GameConstructorParams({
+                        ISuperFaultDisputeGame.GameConstructorParams({
                             gameType: GAME_TYPE,
                             absolutePrestate: absolutePrestate,
                             maxGameDepth: _maxGameDepth,
@@ -224,9 +196,9 @@ contract SuperFaultDisputeGame_Test is SuperFaultDisputeGame_Init {
             _name: "SuperFaultDisputeGame",
             _args: DeployUtils.encodeConstructor(
                 abi.encodeCall(
-                    IFaultDisputeGame.__constructor__,
+                    ISuperFaultDisputeGame.__constructor__,
                     (
-                        IFaultDisputeGame.GameConstructorParams({
+                        ISuperFaultDisputeGame.GameConstructorParams({
                             gameType: GAME_TYPE,
                             absolutePrestate: absolutePrestate,
                             maxGameDepth: 2 ** 3,
@@ -264,9 +236,9 @@ contract SuperFaultDisputeGame_Test is SuperFaultDisputeGame_Init {
             _name: "SuperFaultDisputeGame",
             _args: DeployUtils.encodeConstructor(
                 abi.encodeCall(
-                    IFaultDisputeGame.__constructor__,
+                    ISuperFaultDisputeGame.__constructor__,
                     (
-                        IFaultDisputeGame.GameConstructorParams({
+                        ISuperFaultDisputeGame.GameConstructorParams({
                             gameType: GAME_TYPE,
                             absolutePrestate: absolutePrestate,
                             maxGameDepth: maxGameDepth,
@@ -304,9 +276,9 @@ contract SuperFaultDisputeGame_Test is SuperFaultDisputeGame_Init {
             _name: "SuperFaultDisputeGame",
             _args: DeployUtils.encodeConstructor(
                 abi.encodeCall(
-                    IFaultDisputeGame.__constructor__,
+                    ISuperFaultDisputeGame.__constructor__,
                     (
-                        IFaultDisputeGame.GameConstructorParams({
+                        ISuperFaultDisputeGame.GameConstructorParams({
                             gameType: GAME_TYPE,
                             absolutePrestate: absolutePrestate,
                             maxGameDepth: 2 ** 3,
@@ -352,9 +324,9 @@ contract SuperFaultDisputeGame_Test is SuperFaultDisputeGame_Init {
             _name: "SuperFaultDisputeGame",
             _args: DeployUtils.encodeConstructor(
                 abi.encodeCall(
-                    IFaultDisputeGame.__constructor__,
+                    ISuperFaultDisputeGame.__constructor__,
                     (
-                        IFaultDisputeGame.GameConstructorParams({
+                        ISuperFaultDisputeGame.GameConstructorParams({
                             gameType: GAME_TYPE,
                             absolutePrestate: absolutePrestate,
                             maxGameDepth: 16,
@@ -390,9 +362,9 @@ contract SuperFaultDisputeGame_Test is SuperFaultDisputeGame_Init {
             _name: "SuperFaultDisputeGame",
             _args: DeployUtils.encodeConstructor(
                 abi.encodeCall(
-                    IFaultDisputeGame.__constructor__,
+                    ISuperFaultDisputeGame.__constructor__,
                     (
-                        IFaultDisputeGame.GameConstructorParams({
+                        ISuperFaultDisputeGame.GameConstructorParams({
                             gameType: GameType.wrap(type(uint32).max),
                             absolutePrestate: absolutePrestate,
                             maxGameDepth: 16,
@@ -445,19 +417,20 @@ contract SuperFaultDisputeGame_Test is SuperFaultDisputeGame_Init {
     }
 
     ////////////////////////////////////////////////////////////////
-    //          `IFaultDisputeGame` Implementation Tests       //
+    //          `ISuperFaultDisputeGame` Implementation Tests       //
     ////////////////////////////////////////////////////////////////
 
     /// @dev Tests that the game cannot be initialized with an output root that commits to <= the configured starting
     ///      block number
     function testFuzz_initialize_cannotProposeGenesis_reverts(uint256 _blockNumber) public {
-        (, uint256 startingL2Block) = gameProxy.startingOutputRoot();
+        (, uint256 startingL2Block) = gameProxy.startingProposal();
         _blockNumber = bound(_blockNumber, 0, startingL2Block);
 
         Claim claim = _dummyClaim();
         vm.expectRevert(abi.encodeWithSelector(UnexpectedRootClaim.selector, claim));
-        gameProxy =
-            IFaultDisputeGame(payable(address(disputeGameFactory.create(GAME_TYPE, claim, abi.encode(_blockNumber)))));
+        gameProxy = ISuperFaultDisputeGame(
+            payable(address(disputeGameFactory.create{ value: initBond }(GAME_TYPE, claim, abi.encode(_blockNumber))))
+        );
     }
 
     /// @dev Tests that the proxy receives ETH from the dispute game factory.
@@ -466,11 +439,11 @@ contract SuperFaultDisputeGame_Test is SuperFaultDisputeGame_Init {
         vm.deal(address(this), _value);
 
         assertEq(address(gameProxy).balance, 0);
-        gameProxy = IFaultDisputeGame(
+        gameProxy = ISuperFaultDisputeGame(
             payable(
                 address(
                     disputeGameFactory.create{ value: _value }(
-                        GAME_TYPE, arbitaryRootClaim, abi.encode(validL2BlockNumber)
+                        GAME_TYPE, arbitaryRootClaim, abi.encode(validl2SequenceNumber)
                     )
                 )
             )
@@ -483,7 +456,9 @@ contract SuperFaultDisputeGame_Test is SuperFaultDisputeGame_Init {
     function test_initialize_invalidRoot_reverts() public {
         Claim claim = Claim.wrap(keccak256("invalid"));
         vm.expectRevert(bytes4(keccak256("SuperFaultDisputeGameInvalidRootClaim()")));
-        gameProxy = IFaultDisputeGame(payable(address(disputeGameFactory.create(GAME_TYPE, claim, extraData))));
+        gameProxy = ISuperFaultDisputeGame(
+            payable(address(disputeGameFactory.create{ value: initBond }(GAME_TYPE, claim, extraData)))
+        );
     }
 
     /// @dev Tests that the game cannot be initialized with extra data of the incorrect length (must be 32 bytes)
@@ -500,14 +475,16 @@ contract SuperFaultDisputeGame_Test is SuperFaultDisputeGame_Init {
         bytes memory _extraData = new bytes(_extraDataLen);
 
         // Assign the first 32 bytes in `extraData` to a valid L2 block number passed the starting block.
-        (, uint256 startingL2Block) = gameProxy.startingOutputRoot();
+        (, uint256 startingL2Block) = gameProxy.startingProposal();
         assembly {
             mstore(add(_extraData, 0x20), add(startingL2Block, 1))
         }
 
         Claim claim = _dummyClaim();
         vm.expectRevert(abi.encodeWithSelector(BadExtraData.selector));
-        gameProxy = IFaultDisputeGame(payable(address(disputeGameFactory.create(GAME_TYPE, claim, _extraData))));
+        gameProxy = ISuperFaultDisputeGame(
+            payable(address(disputeGameFactory.create{ value: initBond }(GAME_TYPE, claim, _extraData)))
+        );
     }
 
     /// @dev Tests that the game is initialized with the correct data.
@@ -525,7 +502,7 @@ contract SuperFaultDisputeGame_Test is SuperFaultDisputeGame_Init {
         assertEq(parentIndex, type(uint32).max);
         assertEq(counteredBy, address(0));
         assertEq(claimant, address(this));
-        assertEq(bond, 0);
+        assertEq(bond, initBond);
         assertEq(claim.raw(), ROOT_CLAIM.raw());
         assertEq(position.raw(), 1);
         assertEq(clock.raw(), LibClock.wrap(Duration.wrap(0), Timestamp.wrap(uint64(block.timestamp))).raw());
@@ -548,7 +525,9 @@ contract SuperFaultDisputeGame_Test is SuperFaultDisputeGame_Init {
 
         // Creation should fail.
         vm.expectRevert(AnchorRootNotFound.selector);
-        gameProxy = IFaultDisputeGame(payable(address(disputeGameFactory.create(GAME_TYPE, _dummyClaim(), hex""))));
+        gameProxy = ISuperFaultDisputeGame(
+            payable(address(disputeGameFactory.create{ value: initBond }(GAME_TYPE, _dummyClaim(), hex"")))
+        );
     }
 
     /// @dev Tests that the game cannot be initialized twice.
@@ -557,13 +536,13 @@ contract SuperFaultDisputeGame_Test is SuperFaultDisputeGame_Init {
         gameProxy.initialize();
     }
 
-    /// @dev Tests that startingOutputRoot and it's getters are set correctly.
-    function test_startingOutputRootGetters_succeeds() public view {
-        (Hash root, uint256 l2BlockNumber) = gameProxy.startingOutputRoot();
+    /// @dev Tests that startingProposal and it's getters are set correctly.
+    function test_startingProposalGetters_succeeds() public view {
+        (Hash root, uint256 l2SequenceNumber) = gameProxy.startingProposal();
         (Hash anchorRoot, uint256 anchorRootBlockNumber) = anchorStateRegistry.anchors(GAME_TYPE);
 
-        assertEq(gameProxy.startingBlockNumber(), l2BlockNumber);
-        assertEq(gameProxy.startingBlockNumber(), anchorRootBlockNumber);
+        assertEq(gameProxy.startingSequenceNumber(), l2SequenceNumber);
+        assertEq(gameProxy.startingSequenceNumber(), anchorRootBlockNumber);
         assertEq(Hash.unwrap(gameProxy.startingRootHash()), Hash.unwrap(root));
         assertEq(Hash.unwrap(gameProxy.startingRootHash()), Hash.unwrap(anchorRoot));
     }
@@ -930,7 +909,7 @@ contract SuperFaultDisputeGame_Test is SuperFaultDisputeGame_Init {
         assertEq(parentIndex, type(uint32).max);
         assertEq(counteredBy, address(0));
         assertEq(claimant, address(this));
-        assertEq(bond, 0);
+        assertEq(bond, initBond);
         assertEq(claim.raw(), ROOT_CLAIM.raw());
         assertEq(position.raw(), 1);
         assertEq(clock.raw(), LibClock.wrap(Duration.wrap(0), Timestamp.wrap(uint64(block.timestamp - 5))).raw());
@@ -1437,7 +1416,7 @@ contract SuperFaultDisputeGame_Test is SuperFaultDisputeGame_Init {
         // Ensure we bonded the correct amounts
         assertEq(address(this).balance, bal - totalBonded);
         assertEq(address(gameProxy).balance, 0);
-        assertEq(delayedWeth.balanceOf(address(gameProxy)), totalBonded);
+        assertEq(delayedWeth.balanceOf(address(gameProxy)), initBond + totalBonded);
 
         // Resolve all claims
         vm.warp(block.timestamp + 3 days + 12 hours);
@@ -1463,12 +1442,12 @@ contract SuperFaultDisputeGame_Test is SuperFaultDisputeGame_Init {
         gameProxy.claimCredit(address(this));
 
         // Ensure that bonds were paid out correctly.
-        assertEq(address(this).balance, bal);
+        assertEq(address(this).balance, bal + initBond);
         assertEq(address(gameProxy).balance, 0);
         assertEq(delayedWeth.balanceOf(address(gameProxy)), 0);
 
         // Ensure that the init bond for the game is 0, in case we change it in the test suite in the future.
-        assertEq(disputeGameFactory.initBonds(GAME_TYPE), 0);
+        assertEq(disputeGameFactory.initBonds(GAME_TYPE), initBond);
     }
 
     /// @dev Static unit test asserting that resolve pays out bonds on step, output bisection, and execution trace
@@ -1537,7 +1516,7 @@ contract SuperFaultDisputeGame_Test is SuperFaultDisputeGame_Init {
         assertEq(address(this).balance, 1000 ether - thisBonded);
         assertEq(bob.balance, 1000 ether - bobBonded);
         assertEq(address(gameProxy).balance, 0);
-        assertEq(delayedWeth.balanceOf(address(gameProxy)), thisBonded + bobBonded);
+        assertEq(delayedWeth.balanceOf(address(gameProxy)), initBond + thisBonded + bobBonded);
 
         // Resolve all claims
         vm.warp(block.timestamp + 3 days + 12 hours);
@@ -1570,13 +1549,13 @@ contract SuperFaultDisputeGame_Test is SuperFaultDisputeGame_Init {
         gameProxy.claimCredit(bob);
 
         // Ensure that bonds were paid out correctly.
-        assertEq(address(this).balance, 1000 ether + bobBonded);
+        assertEq(address(this).balance, 1000 ether + initBond + bobBonded);
         assertEq(bob.balance, 1000 ether - bobBonded);
         assertEq(address(gameProxy).balance, 0);
         assertEq(delayedWeth.balanceOf(address(gameProxy)), 0);
 
         // Ensure that the init bond for the game is 0, in case we change it in the test suite in the future.
-        assertEq(disputeGameFactory.initBonds(GAME_TYPE), 0);
+        assertEq(disputeGameFactory.initBonds(GAME_TYPE), initBond);
     }
 
     /// @dev Static unit test asserting that resolve pays out bonds on moves to the leftmost actor
@@ -1647,22 +1626,22 @@ contract SuperFaultDisputeGame_Test is SuperFaultDisputeGame_Init {
         // Ensure that bonds were paid out correctly.
         uint256 aliceLosses = firstBond;
         uint256 charlieLosses = secondBond;
-        assertEq(address(this).balance, bal + aliceLosses, "incorrect this balance");
+        assertEq(address(this).balance, bal + aliceLosses + initBond, "incorrect this balance");
         assertEq(alice.balance, bal - aliceLosses + charlieLosses, "incorrect alice balance");
         assertEq(bob.balance, bal, "incorrect bob balance");
         assertEq(charlie.balance, bal - charlieLosses, "incorrect charlie balance");
         assertEq(address(gameProxy).balance, 0);
 
         // Ensure that the init bond for the game is 0, in case we change it in the test suite in the future.
-        assertEq(disputeGameFactory.initBonds(GAME_TYPE), 0);
+        assertEq(disputeGameFactory.initBonds(GAME_TYPE), initBond);
     }
 
     /// @dev Static unit test asserting that the anchor state updates when the game resolves in
     /// favor of the defender and the anchor state is older than the game state.
     function test_resolve_validNewerStateUpdatesAnchor_succeeds() public {
         // Confirm that the anchor state is older than the game state.
-        (Hash root, uint256 l2BlockNumber) = anchorStateRegistry.anchors(gameProxy.gameType());
-        assert(l2BlockNumber < gameProxy.l2BlockNumber());
+        (Hash root, uint256 l2SequenceNumber) = anchorStateRegistry.anchors(gameProxy.gameType());
+        assert(l2SequenceNumber < gameProxy.l2SequenceNumber());
 
         // Resolve the game.
         vm.warp(block.timestamp + 3 days + 12 hours);
@@ -1676,8 +1655,8 @@ contract SuperFaultDisputeGame_Test is SuperFaultDisputeGame_Init {
         gameProxy.closeGame();
 
         // Confirm that the anchor state is now the same as the game state.
-        (root, l2BlockNumber) = anchorStateRegistry.anchors(gameProxy.gameType());
-        assertEq(l2BlockNumber, gameProxy.l2BlockNumber());
+        (root, l2SequenceNumber) = anchorStateRegistry.anchors(gameProxy.gameType());
+        assertEq(l2SequenceNumber, gameProxy.l2SequenceNumber());
         assertEq(root.raw(), gameProxy.rootClaim().raw());
     }
 
@@ -1685,14 +1664,14 @@ contract SuperFaultDisputeGame_Test is SuperFaultDisputeGame_Init {
     /// resolves in favor of the defender but the game state is not newer than the anchor state.
     function test_resolve_validOlderStateSameAnchor_succeeds() public {
         // Mock the game block to be older than the game state.
-        vm.mockCall(address(gameProxy), abi.encodeCall(gameProxy.l2BlockNumber, ()), abi.encode(0));
+        vm.mockCall(address(gameProxy), abi.encodeCall(gameProxy.l2SequenceNumber, ()), abi.encode(0));
 
         // Confirm that the anchor state is newer than the game state.
-        (Hash root, uint256 l2BlockNumber) = anchorStateRegistry.anchors(gameProxy.gameType());
-        assert(l2BlockNumber >= gameProxy.l2BlockNumber());
+        (Hash root, uint256 l2SequenceNumber) = anchorStateRegistry.anchors(gameProxy.gameType());
+        assert(l2SequenceNumber >= gameProxy.l2SequenceNumber());
 
         // Resolve the game.
-        vm.mockCall(address(gameProxy), abi.encodeCall(gameProxy.l2BlockNumber, ()), abi.encode(0));
+        vm.mockCall(address(gameProxy), abi.encodeCall(gameProxy.l2SequenceNumber, ()), abi.encode(0));
         vm.warp(block.timestamp + 3 days + 12 hours);
         gameProxy.resolveClaim(0, 0);
         assertEq(uint8(gameProxy.resolve()), uint8(GameStatus.DEFENDER_WINS));
@@ -1704,8 +1683,8 @@ contract SuperFaultDisputeGame_Test is SuperFaultDisputeGame_Init {
         gameProxy.closeGame();
 
         // Confirm that the anchor state is the same as the initial anchor state.
-        (Hash updatedRoot, uint256 updatedL2BlockNumber) = anchorStateRegistry.anchors(gameProxy.gameType());
-        assertEq(updatedL2BlockNumber, l2BlockNumber);
+        (Hash updatedRoot, uint256 updatedl2SequenceNumber) = anchorStateRegistry.anchors(gameProxy.gameType());
+        assertEq(updatedl2SequenceNumber, l2SequenceNumber);
         assertEq(updatedRoot.raw(), root.raw());
     }
 
@@ -1713,8 +1692,8 @@ contract SuperFaultDisputeGame_Test is SuperFaultDisputeGame_Init {
     /// resolves in favor of the challenger, even if the game state is newer than the anchor.
     function test_resolve_invalidStateSameAnchor_succeeds() public {
         // Confirm that the anchor state is older than the game state.
-        (Hash root, uint256 l2BlockNumber) = anchorStateRegistry.anchors(gameProxy.gameType());
-        assert(l2BlockNumber < gameProxy.l2BlockNumber());
+        (Hash root, uint256 l2SequenceNumber) = anchorStateRegistry.anchors(gameProxy.gameType());
+        assert(l2SequenceNumber < gameProxy.l2SequenceNumber());
 
         // Challenge the claim and resolve it.
         (,,,, Claim disputed,,) = gameProxy.claimData(0);
@@ -1731,8 +1710,8 @@ contract SuperFaultDisputeGame_Test is SuperFaultDisputeGame_Init {
         gameProxy.closeGame();
 
         // Confirm that the anchor state is the same as the initial anchor state.
-        (Hash updatedRoot, uint256 updatedL2BlockNumber) = anchorStateRegistry.anchors(gameProxy.gameType());
-        assertEq(updatedL2BlockNumber, l2BlockNumber);
+        (Hash updatedRoot, uint256 updatedl2SequenceNumber) = anchorStateRegistry.anchors(gameProxy.gameType());
+        assertEq(updatedl2SequenceNumber, l2SequenceNumber);
         assertEq(updatedRoot.raw(), root.raw());
     }
 
@@ -1835,7 +1814,7 @@ contract SuperFaultDisputeGame_Test is SuperFaultDisputeGame_Init {
         // Ensure the game proxy has 1 ether in it.
         assertEq(address(gameProxy).balance, 1 ether);
         // Ensure the game has a balance of reenterBond in the delayedWeth contract.
-        assertEq(delayedWeth.balanceOf(address(gameProxy)), reenterBond);
+        assertEq(delayedWeth.balanceOf(address(gameProxy)), initBond + reenterBond);
 
         // Resolve the claim at index 2 first so that index 1 can be resolved.
         gameProxy.resolveClaim(2, 0);
@@ -1874,7 +1853,7 @@ contract SuperFaultDisputeGame_Test is SuperFaultDisputeGame_Init {
         assertEq(reenter.numCalls(), 2);
         assertEq(address(reenter).balance, reenterBond);
         assertEq(address(gameProxy).balance, 1 ether);
-        assertEq(delayedWeth.balanceOf(address(gameProxy)), 0);
+        assertEq(delayedWeth.balanceOf(address(gameProxy)), initBond);
 
         vm.stopPrank();
     }
@@ -1972,7 +1951,7 @@ contract SuperFaultDisputeGame_Test is SuperFaultDisputeGame_Init {
         gameProxy.attack{ value: lastBond }(disputed, 4, _changeClaimStatus(_dummyClaim(), VMStatuses.PANIC));
 
         // Expected start/disputed claims
-        (Hash root,) = gameProxy.startingOutputRoot();
+        (Hash root,) = gameProxy.startingProposal();
         bytes32 startingClaim = root.raw();
         bytes32 disputedClaim = bytes32(uint256(3));
         Position disputedPos = LibPosition.wrap(4, 0);
@@ -1982,7 +1961,7 @@ contract SuperFaultDisputeGame_Test is SuperFaultDisputeGame_Init {
             gameProxy.l1Head().raw(),
             startingClaim,
             disputedClaim,
-            bytes32(uint256(gameProxy.l2BlockNumber()) << 0xC0)
+            bytes32(uint256(gameProxy.l2SequenceNumber()) << 0xC0)
         ];
 
         for (uint256 i = 1; i <= 4; i++) {
@@ -2032,7 +2011,7 @@ contract SuperFaultDisputeGame_Test is SuperFaultDisputeGame_Init {
             gameProxy.l1Head().raw(),
             startingClaim,
             disputedClaim,
-            bytes32(uint256(gameProxy.l2BlockNumber()) << 0xC0)
+            bytes32(uint256(gameProxy.l2SequenceNumber()) << 0xC0)
         ];
 
         for (uint256 i = 1; i <= 4; i++) {
@@ -2058,13 +2037,13 @@ contract SuperFaultDisputeGame_Test is SuperFaultDisputeGame_Init {
 
     /// @dev Tests that the L2 block number claim is favored over the bisected-to block when adding data
     ///
-    function test_addLocalData_l2BlockNumberExtension_succeeds() public {
+    function test_addLocalData_l2SequenceNumberExtension_succeeds() public {
         // Deploy a new dispute game with a L2 block number claim of 8. This is directly in the middle of
         // the leaves in our output bisection test tree, at SPLIT_DEPTH = 2 ** 2
-        IFaultDisputeGame game = IFaultDisputeGame(
+        ISuperFaultDisputeGame game = ISuperFaultDisputeGame(
             address(
-                disputeGameFactory.create(
-                    GAME_TYPE, Claim.wrap(bytes32(uint256(0xFF))), abi.encode(uint256(validL2BlockNumber))
+                disputeGameFactory.create{ value: initBond }(
+                    GAME_TYPE, Claim.wrap(bytes32(uint256(0xFF))), abi.encode(uint256(validl2SequenceNumber))
                 )
             )
         );
@@ -2100,9 +2079,9 @@ contract SuperFaultDisputeGame_Test is SuperFaultDisputeGame_Init {
         bytes32 disputedClaim = bytes32(uint256(0xFF));
         Position disputedPos = LibPosition.wrap(0, 0);
 
-        // Expected local data. This should be `l2BlockNumber`, and not the actual bisected-to block,
+        // Expected local data. This should be `l2SequenceNumber`, and not the actual bisected-to block,
         // as we choose the minimum between the two.
-        bytes32 expectedNumber = bytes32(uint256(validL2BlockNumber << 0xC0));
+        bytes32 expectedNumber = bytes32(uint256(validl2SequenceNumber << 0xC0));
         uint256 expectedLen = 8;
         uint256 l2NumberIdent = LocalPreimageKey.DISPUTED_L2_BLOCK_NUMBER;
 
@@ -2314,7 +2293,7 @@ contract SuperFaultDisputeGame_Test is SuperFaultDisputeGame_Init {
     function _generateOutputRootProof(
         bytes32 _storageRoot,
         bytes32 _withdrawalRoot,
-        bytes memory _l2BlockNumber
+        bytes memory _l2SequenceNumber
     )
         internal
         pure
@@ -2330,7 +2309,7 @@ contract SuperFaultDisputeGame_Test is SuperFaultDisputeGame_Init {
         rawHeaderRLP[5] = hex"83FACADE";
         rawHeaderRLP[6] = hex"83FACADE";
         rawHeaderRLP[7] = hex"83FACADE";
-        rawHeaderRLP[8] = RLPWriter.writeBytes(_l2BlockNumber);
+        rawHeaderRLP[8] = RLPWriter.writeBytes(_l2SequenceNumber);
         rlp_ = RLPWriter.writeList(rawHeaderRLP);
 
         // Output root
@@ -2728,7 +2707,7 @@ contract SuperFaultDispute_1v1_Actors_Test is SuperFaultDisputeGame_Init {
         Claim absolutePrestateExec =
             _changeClaimStatus(Claim.wrap(keccak256(absolutePrestateData_)), VMStatuses.UNFINISHED);
         Claim rootClaim = Claim.wrap(bytes32(uint256(_rootClaim)));
-        super.init({ rootClaim: rootClaim, absolutePrestate: absolutePrestateExec, l2BlockNumber: _rootClaim });
+        super.init({ rootClaim: rootClaim, absolutePrestate: absolutePrestateExec, l2SequenceNumber: _rootClaim });
     }
 
     /// @dev Helper to create actors for the 1v1 dispute.
@@ -2743,13 +2722,13 @@ contract SuperFaultDispute_1v1_Actors_Test is SuperFaultDisputeGame_Init {
         internal
     {
         honest = new HonestDisputeActor({
-            _gameProxy: gameProxy,
+            _gameProxy: IFaultDisputeGame(address(gameProxy)),
             _l2Outputs: _honestL2Outputs,
             _trace: _honestTrace,
             _preStateData: _honestPreStateData
         });
         dishonest = new HonestDisputeActor({
-            _gameProxy: gameProxy,
+            _gameProxy: IFaultDisputeGame(address(gameProxy)),
             _l2Outputs: _dishonestL2Outputs,
             _trace: _dishonestTrace,
             _preStateData: _dishonestPreStateData
@@ -2794,10 +2773,10 @@ contract SuperFaultDispute_1v1_Actors_Test is SuperFaultDisputeGame_Init {
 
 contract ClaimCreditReenter {
     Vm internal immutable vm;
-    IFaultDisputeGame internal immutable GAME;
+    ISuperFaultDisputeGame internal immutable GAME;
     uint256 public numCalls;
 
-    constructor(IFaultDisputeGame _gameProxy, Vm _vm) {
+    constructor(ISuperFaultDisputeGame _gameProxy, Vm _vm) {
         GAME = _gameProxy;
         vm = _vm;
     }

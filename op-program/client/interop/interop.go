@@ -23,6 +23,7 @@ import (
 var (
 	ErrIncorrectOutputRootType = errors.New("incorrect output root type")
 	ErrL1HeadReached           = errors.New("l1 head reached")
+	ErrInvalidPrestate         = errors.New("invalid prestate")
 
 	InvalidTransition     = []byte("invalid")
 	InvalidTransitionHash = crypto.Keccak256Hash(InvalidTransition)
@@ -53,22 +54,20 @@ type taskExecutor interface {
 		l1Oracle l1.Oracle,
 		l2Oracle l2.Oracle,
 		optimisticBlock *ethtypes.Block,
+		db l2.KeyValueStore,
 	) (blockHash common.Hash, outputRoot eth.Bytes32, err error)
 }
 
-func RunInteropProgram(logger log.Logger, bootInfo *boot.BootInfoInterop, l1PreimageOracle l1.Oracle, l2PreimageOracle l2.Oracle, validateClaim bool) error {
-	return runInteropProgram(logger, bootInfo, l1PreimageOracle, l2PreimageOracle, validateClaim, &interopTaskExecutor{})
+func RunInteropProgram(logger log.Logger, bootInfo *boot.BootInfoInterop, l1PreimageOracle l1.Oracle, l2PreimageOracle l2.Oracle) error {
+	return runInteropProgram(logger, bootInfo, l1PreimageOracle, l2PreimageOracle, &interopTaskExecutor{})
 }
 
-func runInteropProgram(logger log.Logger, bootInfo *boot.BootInfoInterop, l1PreimageOracle l1.Oracle, l2PreimageOracle l2.Oracle, validateClaim bool, tasks taskExecutor) error {
+func runInteropProgram(logger log.Logger, bootInfo *boot.BootInfoInterop, l1PreimageOracle l1.Oracle, l2PreimageOracle l2.Oracle, tasks taskExecutor) error {
 	logger.Info("Interop Program Bootstrapped", "bootInfo", bootInfo)
 
 	expected, err := stateTransition(logger, bootInfo, l1PreimageOracle, l2PreimageOracle, tasks)
 	if err != nil {
 		return err
-	}
-	if !validateClaim {
-		return nil
 	}
 	return claim.ValidateClaim(logger, eth.Bytes32(bootInfo.Claim), eth.Bytes32(expected))
 }
@@ -81,18 +80,21 @@ func stateTransition(logger log.Logger, bootInfo *boot.BootInfoInterop, l1Preima
 	if err != nil {
 		return common.Hash{}, err
 	}
+	logger.Info("Loaded agreed state", "step", transitionState.Step)
 	// Strictly, the state transition ends when superRoot.Timestamp == bootInfo.GameTimestamp.
 	// Since the valid state transition ends at the game timestamp, there isn't any valid hash resulting from
 	// an agreed prestate and so the program panics to make it clear that the setup is invalid.
 	// The honest actor will never agree to a prestate where superRoot.Timestamp > bootInfo.GameTimestamp and so will
 	// be unaffected by this
 	if superRoot.Timestamp == bootInfo.GameTimestamp {
+		logger.Info("Already reached game timestamp. No derivation required.")
 		return bootInfo.AgreedPrestate, nil
 	} else if superRoot.Timestamp > bootInfo.GameTimestamp {
-		panic(fmt.Errorf("agreed prestate timestamp %v is after the game timestamp %v", superRoot.Timestamp, bootInfo.GameTimestamp))
+		panic(fmt.Sprintf("agreed prestate timestamp %v is after the game timestamp %v", superRoot.Timestamp, bootInfo.GameTimestamp))
 	}
 	expectedPendingProgress := transitionState.PendingProgress
 	if transitionState.Step < uint64(len(superRoot.Chains)) {
+		logger.Info("Deriving optimistic block")
 		block, err := deriveOptimisticBlock(logger, bootInfo, l1PreimageOracle, l2PreimageOracle, superRoot, transitionState, tasks)
 		if errors.Is(err, ErrL1HeadReached) {
 			return InvalidTransitionHash, nil
@@ -101,9 +103,10 @@ func stateTransition(logger log.Logger, bootInfo *boot.BootInfoInterop, l1Preima
 		}
 		expectedPendingProgress = append(expectedPendingProgress, block)
 	} else if transitionState.Step == ConsolidateStep {
+		logger.Info("Running consolidate step")
 		// sanity check
 		if len(transitionState.PendingProgress) >= ConsolidateStep {
-			return common.Hash{}, fmt.Errorf("pending progress length does not match the expected step")
+			return common.Hash{}, fmt.Errorf("%w: pending progress length does not match the expected step", ErrInvalidPrestate)
 		}
 		expectedSuperRoot, err := RunConsolidation(
 			logger, bootInfo, l1PreimageOracle, l2PreimageOracle, transitionState, superRoot, tasks)
@@ -214,6 +217,7 @@ func (t *interopTaskExecutor) BuildDepositOnlyBlock(
 	l1Oracle l1.Oracle,
 	l2Oracle l2.Oracle,
 	optimisticBlock *ethtypes.Block,
+	db l2.KeyValueStore,
 ) (common.Hash, eth.Bytes32, error) {
 	return tasks.BuildDepositOnlyBlock(
 		logger,
@@ -224,5 +228,6 @@ func (t *interopTaskExecutor) BuildDepositOnlyBlock(
 		agreedL2OutputRoot,
 		l1Oracle,
 		l2Oracle,
+		db,
 	)
 }

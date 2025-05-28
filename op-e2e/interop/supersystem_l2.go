@@ -25,6 +25,7 @@ import (
 	"github.com/ethereum-optimism/optimism/op-service/dial"
 	"github.com/ethereum-optimism/optimism/op-service/endpoint"
 	oplog "github.com/ethereum-optimism/optimism/op-service/log"
+	opsigner "github.com/ethereum-optimism/optimism/op-service/signer"
 	"github.com/ethereum-optimism/optimism/op-service/sources"
 	"github.com/ethereum-optimism/optimism/op-service/testlog"
 	"github.com/ethereum/go-ethereum/eth/ethconfig"
@@ -55,6 +56,10 @@ type l2Net struct {
 	nodes    map[string]*l2Node
 }
 
+func (s *interopE2ESystem) L2GethEndpoint(id string, name string) endpoint.RPC {
+	net := s.l2s[id]
+	return net.nodes[name].l2Geth.UserRPC()
+}
 func (s *interopE2ESystem) L2GethClient(id string, name string) *ethclient.Client {
 	net := s.l2s[id]
 	node := net.nodes[name]
@@ -75,6 +80,12 @@ func (s *interopE2ESystem) L2GethClient(id string, name string) *ethclient.Clien
 		})
 	node.gethClient = ethclient.NewClient(rpcCl)
 	return node.gethClient
+}
+
+func (s *interopE2ESystem) L2RollupEndpoint(id string, name string) endpoint.RPC {
+	net := s.l2s[id]
+	node := net.nodes[name]
+	return node.opNode.UserRPC()
 }
 
 func (s *interopE2ESystem) L2RollupClient(id string, name string) *sources.RollupClient {
@@ -100,7 +111,6 @@ func (s *interopE2ESystem) newL2(id string, l2Out *interopgen.L2Output) l2Net {
 	operatorKeys := s.newOperatorKeysForL2(l2Out)
 	l2Geth := s.newGethForL2(id, "sequencer", l2Out)
 	opNode := s.newNodeForL2(id, "sequencer", l2Out, operatorKeys, l2Geth, true)
-	// TODO(#11886): proposer does not work with the generated world as there is no DisputeGameFactoryProxy
 	proposer := s.newProposerForL2(id, operatorKeys)
 	batcher := s.newBatcherForL2(id, operatorKeys, l2Geth, opNode)
 
@@ -157,7 +167,7 @@ func (s *interopE2ESystem) newNodeForL2(
 		},
 		Rollup: *l2Out.RollupCfg,
 		P2PSigner: &p2p.PreparedSigner{
-			Signer: p2p.NewLocalSigner(&p2pKey)},
+			Signer: opsigner.NewLocalSigner(&p2pKey)},
 		RPC: node.RPCConfig{
 			ListenAddr:  "127.0.0.1",
 			ListenPort:  0,
@@ -222,9 +232,9 @@ func (s *interopE2ESystem) newProposerForL2(
 	proposerCLIConfig := &l2os.CLIConfig{
 		L1EthRpc:          s.l1.UserRPC().RPC(),
 		SupervisorRpcs:    []string{s.Supervisor().RPC()},
-		DGFAddress:        s.worldDeployment.L2s[id].DisputeGameFactoryProxy.Hex(),
+		DGFAddress:        s.worldDeployment.Interop.DisputeGameFactory.Hex(),
 		ProposalInterval:  6 * time.Second,
-		DisputeGameType:   1, // Permissioned game type is the only one currently deployed
+		DisputeGameType:   4, // Super Permissionless game type is the only one currently deployed
 		PollInterval:      500 * time.Millisecond,
 		TxMgrConfig:       setuputils.NewTxMgrConfig(s.L1().UserRPC(), &key),
 		AllowNonFinalized: true,
@@ -257,8 +267,8 @@ func (s *interopE2ESystem) newBatcherForL2(
 	logger := s.logger.New("role", "batcher"+id)
 	batcherCLIConfig := &bss.CLIConfig{
 		L1EthRpc:                 s.l1.UserRPC().RPC(),
-		L2EthRpc:                 l2Geth.UserRPC().RPC(),
-		RollupRpc:                opNode.UserRPC().RPC(),
+		L2EthRpc:                 []string{l2Geth.UserRPC().RPC()},
+		RollupRpc:                []string{opNode.UserRPC().RPC()},
 		MaxPendingTransactions:   1,
 		MaxChannelDuration:       1,
 		MaxL1TxSize:              120_000,

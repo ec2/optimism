@@ -29,11 +29,12 @@ type InstrumentedState struct {
 	meta           mipsevm.Metadata
 
 	cached_decode []InstructionDetails
+	features      mipsevm.FeatureToggles
 }
 
 var _ mipsevm.FPVM = (*InstrumentedState)(nil)
 
-func NewInstrumentedState(state *State, po mipsevm.PreimageOracle, stdOut, stdErr io.Writer, log log.Logger, meta mipsevm.Metadata) *InstrumentedState {
+func NewInstrumentedState(state *State, po mipsevm.PreimageOracle, stdOut, stdErr io.Writer, log log.Logger, meta mipsevm.Metadata, features mipsevm.FeatureToggles) *InstrumentedState {
 	cached_decode := make([]InstructionDetails, 0)
 	for pc := Word(0); pc < Word(len(state.Memory.MappedRegions[0].Data)); pc += 4 {
 		insn, opcode, fun := exec.GetInstructionDetails(pc, state.Memory)
@@ -50,6 +51,7 @@ func NewInstrumentedState(state *State, po mipsevm.PreimageOracle, stdOut, stdEr
 		preimageOracle: exec.NewTrackingPreimageOracleReader(po),
 		meta:           meta,
 		cached_decode:  cached_decode,
+		features:       features,
 	}
 }
 

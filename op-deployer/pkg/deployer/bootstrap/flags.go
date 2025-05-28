@@ -10,7 +10,6 @@ import (
 
 const (
 	OutfileFlagName                         = "outfile"
-	ArtifactsLocatorFlagName                = "artifacts-locator"
 	WithdrawalDelaySecondsFlagName          = "withdrawal-delay-seconds"
 	MinProposalSizeBytesFlagName            = "min-proposal-size-bytes"
 	ChallengePeriodSecondsFlagName          = "challenge-period-seconds"
@@ -19,6 +18,7 @@ const (
 	MIPSVersionFlagName                     = "mips-version"
 	ProxyOwnerFlagName                      = "proxy-owner"
 	SuperchainProxyAdminOwnerFlagName       = "superchain-proxy-admin-owner"
+	L1ContractsReleaseFlagName              = "l1-contracts-release"
 	ProtocolVersionsOwnerFlagName           = "protocol-versions-owner"
 	GuardianFlagName                        = "guardian"
 	PausedFlagName                          = "paused"
@@ -32,11 +32,6 @@ var (
 		Usage:   "Output file. Use - for stdout.",
 		EnvVars: deployer.PrefixEnvVar("OUTFILE"),
 		Value:   "-",
-	}
-	ArtifactsLocatorFlag = &cli.StringFlag{
-		Name:    ArtifactsLocatorFlagName,
-		Usage:   "Locator for artifacts.",
-		EnvVars: deployer.PrefixEnvVar("ARTIFACTS_LOCATOR"),
 	}
 	WithdrawalDelaySecondsFlag = &cli.Uint64Flag{
 		Name:    WithdrawalDelaySecondsFlagName,
@@ -113,11 +108,6 @@ var (
 		Usage:   "Recommended protocol version (semver)",
 		EnvVars: deployer.PrefixEnvVar("RECOMMENDED_PROTOCOL_VERSION"),
 	}
-	L1ContractsReleaseFlag = &cli.StringFlag{
-		Name:    "l1-contracts-release",
-		Usage:   "Release version to set OPCM implementations for, of the format `op-contracts/vX.Y.Z`.",
-		EnvVars: deployer.PrefixEnvVar("L1_CONTRACTS_RELEASE"),
-	}
 	SuperchainConfigProxyFlag = &cli.StringFlag{
 		Name:    "superchain-config-proxy",
 		Usage:   "Superchain config proxy.",
@@ -133,10 +123,10 @@ var (
 		Usage:   "Upgrade controller.",
 		EnvVars: deployer.PrefixEnvVar("UPGRADE_CONTROLLER"),
 	}
-	UseInteropFlag = &cli.BoolFlag{
-		Name:    "use-interop",
-		Usage:   "If true, deploy Interop implementations.",
-		EnvVars: deployer.PrefixEnvVar("USE_INTEROP"),
+	SuperchainProxyAdminFlag = &cli.StringFlag{
+		Name:    "superchain-proxy-admin",
+		Usage:   "Superchain proxy admin.",
+		EnvVars: deployer.PrefixEnvVar("SUPERCHAIN_PROXY_ADMIN"),
 	}
 	ConfigFileFlag = &cli.StringFlag{
 		Name:    "config",
@@ -149,8 +139,7 @@ var ImplementationsFlags = []cli.Flag{
 	deployer.L1RPCURLFlag,
 	deployer.PrivateKeyFlag,
 	OutfileFlag,
-	ArtifactsLocatorFlag,
-	L1ContractsReleaseFlag,
+	deployer.ArtifactsLocatorFlag,
 	MIPSVersionFlag,
 	WithdrawalDelaySecondsFlag,
 	MinProposalSizeBytesFlag,
@@ -160,14 +149,14 @@ var ImplementationsFlags = []cli.Flag{
 	SuperchainConfigProxyFlag,
 	ProtocolVersionsProxyFlag,
 	UpgradeControllerFlag,
-	UseInteropFlag,
+	SuperchainProxyAdminFlag,
 }
 
 var ProxyFlags = []cli.Flag{
 	deployer.L1RPCURLFlag,
 	deployer.PrivateKeyFlag,
 	OutfileFlag,
-	ArtifactsLocatorFlag,
+	deployer.ArtifactsLocatorFlag,
 	ProxyOwnerFlag,
 }
 
@@ -175,7 +164,7 @@ var SuperchainFlags = []cli.Flag{
 	deployer.L1RPCURLFlag,
 	deployer.PrivateKeyFlag,
 	OutfileFlag,
-	ArtifactsLocatorFlag,
+	deployer.ArtifactsLocatorFlag,
 	SuperchainProxyAdminOwnerFlag,
 	ProtocolVersionsOwnerFlag,
 	GuardianFlag,
@@ -188,7 +177,7 @@ var ValidatorFlags = []cli.Flag{
 	deployer.L1RPCURLFlag,
 	deployer.PrivateKeyFlag,
 	OutfileFlag,
-	ArtifactsLocatorFlag,
+	deployer.ArtifactsLocatorFlag,
 	ConfigFileFlag,
 }
 

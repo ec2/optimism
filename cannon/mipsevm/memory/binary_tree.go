@@ -57,7 +57,7 @@ func (m *BinaryTreeIndex) Invalidate(addr Word) {
 	for gindex > 0 {
 		n := m.nodes[gindex]
 		if n != nil {
-			PutByte32(n)
+			ReleaseByte32(n)
 		}
 		m.nodes[gindex] = nil
 		gindex >>= 1
@@ -98,8 +98,7 @@ func (m *BinaryTreeIndex) MerkleizeSubtree(gindex uint64) [32]byte {
 func (m *BinaryTreeIndex) MerkleProof(addr Word) (out [MemProofSize]byte) {
 	proof := m.traverseBranch(1, addr, 0)
 	// encode the proof
-	_ = proof[MemProofLeafCount-1]
-	for i := 0; i <= MemProofLeafCount-1; i++ {
+	for i := 0; i < MemProofLeafCount; i++ {
 		copy(out[i*32:(i+1)*32], proof[i][:])
 	}
 	return out
@@ -135,7 +134,7 @@ func (m *BinaryTreeIndex) AddPage(pageIndex Word) {
 	for k > 0 {
 		n := m.nodes[k]
 		if n != nil {
-			PutByte32(n)
+			ReleaseByte32(n)
 		}
 		m.nodes[k] = nil
 		k >>= 1

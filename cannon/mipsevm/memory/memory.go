@@ -206,7 +206,6 @@ func (m *Memory) SetWord(addr Word, v Word) {
 			m.merkleIndex.Invalidate(addr) // invalidate this branch of memory, now that the value changed
 		}
 	}
-
 	arch.ByteOrderWord.PutWord(p.Data[pageAddr:pageAddr+arch.WordSizeBytes], v)
 }
 

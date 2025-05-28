@@ -83,7 +83,10 @@ func (s *channelManager) Clear(l1OriginLastSubmittedChannel eth.BlockID) {
 	s.tip = common.Hash{}
 	s.currentChannel = nil
 	s.channelQueue = nil
-	s.metr.RecordChannelQueueLength(0)
+
+	// This is particularly important because pendingDABytes metric controls throttling:
+	s.metr.ClearAllStateMetrics()
+
 	s.txChannels = make(map[string]*channel)
 }
 
@@ -200,7 +203,7 @@ func (s *channelManager) handleChannelInvalidated(c *channel) {
 func (s *channelManager) nextTxData(channel *channel) (txData, error) {
 	if channel == nil || !channel.HasTxData() {
 		s.log.Trace("no next tx data")
-		return txData{}, io.EOF // TODO: not enough data error instead
+		return txData{}, io.EOF
 	}
 	tx := channel.NextTxData()
 
@@ -228,7 +231,7 @@ func (s *channelManager) TxData(l1Head eth.BlockID, isPectra bool) (txData, erro
 		return emptyTxData, err
 	}
 	// If the channel has already started being submitted,
-	// return now and ensure no requeueing happens
+	// return now and ensure no requeuing happens
 	if !channel.NoneSubmitted() {
 		return s.nextTxData(channel)
 	}

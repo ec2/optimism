@@ -1425,12 +1425,8 @@ func setupTestChains(t *testing.T, chainIDs ...eth.ChainID) *testSetup {
 
 	// Create dependency set for all chains
 	deps := make(map[eth.ChainID]*depset.StaticConfigDependency)
-	for i, chainID := range chainIDs {
-		deps[chainID] = &depset.StaticConfigDependency{
-			ChainIndex:     types.ChainIndex(i + 1),
-			ActivationTime: 42,
-			HistoryMinTime: 100,
-		}
+	for _, chainID := range chainIDs {
+		deps[chainID] = &depset.StaticConfigDependency{}
 	}
 	depSet, err := depset.NewStaticConfigDependencySet(deps)
 	require.NoError(t, err)
@@ -1455,7 +1451,7 @@ func setupTestChains(t *testing.T, chainIDs ...eth.ChainID) *testSetup {
 		require.NoError(t, err)
 
 		// Create and open the log DB
-		logDB, err := logs.NewFromFile(logger, &stubMetrics{}, filepath.Join(chainDir, "log.db"), true)
+		logDB, err := logs.NewFromFile(logger, &stubMetrics{}, chainID, filepath.Join(chainDir, "log.db"), true)
 		require.NoError(t, err)
 		chainsDB.AddLogDB(chainID, logDB)
 
